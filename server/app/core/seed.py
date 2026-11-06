@@ -8,7 +8,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from .database import init_db, SessionLocal
+from .database import init_db, SessionLocal, sync_sequences
 from .security import hash_password
 from ..models import AppSetting, Department, Role, RolePermission, User
 
@@ -68,6 +68,9 @@ def run_seed() -> None:
         seed(db)
     finally:
         db.close()
+    # seed() 里内置角色用显式 id 插入，不推进 PG 序列；
+    # 不同步的话首个自增建角色/建号会撞主键（与 installer 同一坑）。
+    sync_sequences()
 
 
 if __name__ == "__main__":

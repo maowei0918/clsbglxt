@@ -20,6 +20,17 @@ def _check_vehicle_scope(db: Session, user: User, v: Vehicle) -> None:
     DeptChecker(user, db).check_dept(v.department_id, "车辆台账")
 
 
+def _as_dt(value: str, field: str):
+    """'YYYY-MM-DD' → 该日 00:00 的 datetime；空串 → None；非法 → 400。
+
+    summary 接口只传年份（无日期参数），get_account 用它统一收口。
+    """
+    from datetime import datetime
+    from ..core.parsing import parse_date
+    d = parse_date(value, field)
+    return datetime(d.year, d.month, d.day) if d else None
+
+
 @router.get("", dependencies=[Depends(require_perm("vehicle_account:view"))])
 def get_account(
     plate_no: str = "",
@@ -40,30 +51,35 @@ def get_account(
 
     _check_vehicle_scope(db, current_user, v)
 
+    # 日期参数统一解析：字符串直接与 timestamp 列比较在 PG 下会报类型错误，
+    # 非法格式也可能 500。转成 datetime 后再过滤。
+    t_from = _as_dt(start_date, "start_date")
+    t_to = _as_dt(end_date, "end_date")
+
     # 维修费
     repair_q = (db.query(RepairOrder, func.max(RepairQuote.total).label("amt"))
                 .outerjoin(RepairQuote, RepairQuote.order_id == RepairOrder.id)
                 .filter(RepairOrder.vehicle_id == v.id))
-    if start_date:
-        repair_q = repair_q.filter(RepairOrder.created_at >= start_date)
-    if end_date:
-        repair_q = repair_q.filter(RepairOrder.created_at <= end_date)
+    if t_from:
+        repair_q = repair_q.filter(RepairOrder.created_at >= t_from)
+    if t_to:
+        repair_q = repair_q.filter(RepairOrder.created_at <= t_to)
     repairs = repair_q.group_by(RepairOrder.id).all()
 
     # 加油记录
     fuel_q = db.query(Che1Fuel).filter(Che1Fuel.fms_vehicle_id == v.id)
-    if start_date:
-        fuel_q = fuel_q.filter(Che1Fuel.fuel_at >= start_date)
-    if end_date:
-        fuel_q = fuel_q.filter(Che1Fuel.fuel_at <= end_date)
+    if t_from:
+        fuel_q = fuel_q.filter(Che1Fuel.fuel_at >= t_from)
+    if t_to:
+        fuel_q = fuel_q.filter(Che1Fuel.fuel_at <= t_to)
     fuels = fuel_q.all()
 
     # 用车记录
     usage_q = db.query(Che1Usage).filter(Che1Usage.fms_vehicle_id == v.id)
-    if start_date:
-        usage_q = usage_q.filter(Che1Usage.out_at >= start_date)
-    if end_date:
-        usage_q = usage_q.filter(Che1Usage.out_at <= end_date)
+    if t_from:
+        usage_q = usage_q.filter(Che1Usage.out_at >= t_from)
+    if t_to:
+        usage_q = usage_q.filter(Che1Usage.out_at <= t_to)
     usages = usage_q.all()
 
     return {

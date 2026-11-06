@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from .core.config import BASE_DIR, DATA_DIR as _DEFAULT_DATA_DIR
+from .core.database import sync_sequences
 from .core.security import hash_password, validate_password
 from .models import Base, Department, Role, RolePermission, User
 
@@ -579,6 +580,11 @@ def save_install(request: Request, payload: dict):
         if not exists:
             db.add(RolePermission(role_id=3, perm_code="*"))
         db.commit()
+
+        # 4.1 对齐自增序列（必须在 seed 提交之后！）
+        # 内置角色/超管用显式 id 插入，不推进 PG sequence；若在建表后
+        # 就同步，表还是空的，setval 到 1，首个自增建号照样撞主键。
+        sync_sequences(engine)
 
         # 5. 写 .env（安装后重启站点生效）
         _write_env(payload)

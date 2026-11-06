@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import get_current_user
+from ..core.parsing import parse_date
 from ..models import (DailyCheckPhoto, DailyCheckRecord, DailyCheckTemplate,
                       EPOCH, User, Vehicle, alive, utcnow_naive)
 from ..core.deps import require_perm
@@ -121,10 +122,12 @@ def list_records(
 
     if vehicle_id:
         q = q.filter(DailyCheckRecord.vehicle_id == vehicle_id)
-    if date_from:
-        q = q.filter(DailyCheckRecord.check_date >= date.fromisoformat(date_from.strip()[:10]))
-    if date_to:
-        q = q.filter(DailyCheckRecord.check_date <= date.fromisoformat(date_to.strip()[:10]))
+    d_from = parse_date(date_from, "date_from")
+    d_to = parse_date(date_to, "date_to")
+    if d_from:
+        q = q.filter(DailyCheckRecord.check_date >= d_from)
+    if d_to:
+        q = q.filter(DailyCheckRecord.check_date <= d_to)
     if has_abnormal is not None:
         q = q.filter(DailyCheckRecord.has_abnormal == has_abnormal)
 
@@ -151,10 +154,9 @@ def submit_record(
 ):
     """提交日检记录（同车同日不可重复提报）。"""
     # 日期格式与范围校验：避免非法字符串直接进 Date 列导致 500
-    try:
-        cd = date.fromisoformat(str(check_date).strip()[:10])
-    except (TypeError, ValueError):
-        raise HTTPException(400, "检查日期格式无效，应为 YYYY-MM-DD")
+    cd = parse_date(check_date, "检查日期")
+    if cd is None:
+        raise HTTPException(400, "检查日期不能为空")
     if cd > date.today():
         raise HTTPException(400, "检查日期不能晚于今天")
     if (date.today() - cd).days > 31:

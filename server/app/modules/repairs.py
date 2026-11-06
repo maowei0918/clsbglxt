@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..core.deps import DeptChecker, get_current_user, require_perm
 from ..core.config import TRUSTED_PROXIES
+from ..core.parsing import parse_date
 from ..models import (Attachment, Department, RepairAction, RepairCC, RepairOrder,
                       RepairQuote, RepairQuoteItem, Supplier, User, Vehicle)
 
@@ -27,15 +28,16 @@ STATUS = {"processing", "completed", "rejected", "cancelled"}
 
 
 def _day_start(s: str) -> datetime:
-    """'2026-11-02' → datetime(2026-11-02 00:00)。"""
-    return datetime.fromisoformat(s.strip()[:10])
+    """'2026-11-02' → datetime(2026-11-02 00:00)；非法格式 → 400。"""
+    d = parse_date(s, "date_from")
+    return datetime(d.year, d.month, d.day)
 
 
 def _day_after(s: str) -> datetime:
     """'2026-11-02' → datetime(2026-11-03 00:00)（右开区间）。"""
-    d = datetime.fromisoformat(s.strip()[:10])
     from datetime import timedelta
-    return d + timedelta(days=1)
+    d = parse_date(s, "date_to")
+    return datetime(d.year, d.month, d.day) + timedelta(days=1)
 
 
 def _can_view_order(db: Session, user: User, order: RepairOrder) -> bool:

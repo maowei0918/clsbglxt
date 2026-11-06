@@ -23,6 +23,10 @@ from ..models import (Department, Role, RolePermission, User, UserRole, Supplier
 log = logging.getLogger("clglxt.personnel")
 router = APIRouter(prefix="/personnel", tags=["personnel"])
 
+# 账号归属 → 角色归属 的映射（_resolve_owner 返回 dept/supplier，
+# 而 Role.side 用 internal/external 表达）
+_OWNER_SIDE = {"dept": "internal", "supplier": "external"}
+
 
 @router.get("", dependencies=[Depends(require_perm("system:user_manage"))])
 def list_users(
@@ -187,12 +191,20 @@ def _resolve_owner(db: Session, department_id: int | None, supplier_id: int | No
 
 
 def _assign_roles(db: Session, user_id: int, role_ids: list[int], owner_type: str):
-    """分角色（归属隔离）。"""
+    """分角色（归属隔离）。
+
+    owner_type 来自 _resolve_owner，取值为 "dept"/"supplier"；
+    而 Role.side 取值为 "internal"/"external"。必须先映射再比较，
+    否则内部部门账号永远匹配不上（"dept" != "internal"）。
+    """
+    side = _OWNER_SIDE.get(owner_type)
+    if side is None:
+        raise HTTPException(400, f"未知账号归属：{owner_type}")
     for rid in role_ids:
         role = db.get(Role, rid)
         if not role:
             raise HTTPException(404, f"角色 {rid} 不存在")
-        if role.side != owner_type:
+        if role.side != side:
             raise HTTPException(400, f"角色 {role.name} 归属 {role.side}，与账号不匹配")
         if db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role_id == rid).first():
             continue

@@ -1,28 +1,17 @@
 """临时用车备案。"""
 import json
 import logging
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import DeptChecker, get_current_user, require_perm
+from ..core.parsing import parse_date as _parse_date
 from ..models import Department, TempVehicleUse, User, Vehicle, now as db_now
 
 log = logging.getLogger("clglxt.vehicle_use")
 router = APIRouter(prefix="/vehicle-use", tags=["vehicle-use"])
-
-
-def _parse_date(value: str, field: str) -> date | None:
-    """把 YYYY-MM-DD 字符串转成 date；空值返回 None，非法格式报 400。"""
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(raw[:10])
-    except ValueError:
-        raise HTTPException(400, f"{field} 日期格式无效，应为 YYYY-MM-DD")
 
 
 @router.get("")

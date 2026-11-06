@@ -62,8 +62,12 @@ async def lifespan(app: FastAPI):
                 f"CLGLXT_JWT_SECRET 过短（{len(JWT_SECRET)} 字符），至少 32 字符。"
                 "生成：openssl rand -hex 32")
         try:
-            from .core.database import init_db
+            from .core.database import init_db, sync_sequences
             init_db()
+            # 校正自增序列（幂等）。内置角色/超管用显式 id 插入，
+            # 不推进 PG sequence；起因于安装期的存量站点也能靠这次
+            # 启动自愈，避免首次建角色/建号撞主键。
+            sync_sequences()
             log.info("数据库表就绪")
         except Exception:
             log.exception("数据库初始化失败（不影响安装向导）")
