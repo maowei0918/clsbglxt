@@ -90,3 +90,15 @@ SMTP_FROM = os.getenv("CLGLXT_SMTP_FROM", "")
 
 # ── 出站策略（SSRF） ──
 SSRF_ALLOWED_HOSTS = os.getenv("CLGLXT_SSRF_ALLOWED_HOSTS", "").split(",") if os.getenv("CLGLXT_SSRF_ALLOWED_HOSTS") else []
+
+# ── FMS 数据导入（一次性迁移，FMS 停机前实施） ──
+# 老 FMS 对外只读 API 基址，例如 https://fms.example.com
+FMS_BASE_URL = os.getenv("CLGLXT_FMS_BASE_URL", "").rstrip("/")
+# FMS 开放接口密钥（fms_ 开头，scope 需含 vehicles/repairs/... 的 :read）
+FMS_API_KEY = os.getenv("CLGLXT_FMS_API_KEY", "")
+# 单页条数（FMS 开放接口上限 500）
+FMS_PAGE_SIZE = int(os.getenv("CLGLXT_FMS_PAGE_SIZE", "200"))
+# 单次 HTTP 超时（秒）
+FMS_TIMEOUT = float(os.getenv("CLGLXT_FMS_TIMEOUT", "30"))
+# 失败重试次数（指数退避）
+FMS_MAX_RETRIES = int(os.getenv("CLGLXT_FMS_MAX_RETRIES", "3"))

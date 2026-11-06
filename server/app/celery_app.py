@@ -21,6 +21,7 @@ celery_app = Celery(
         "app.workers.ai_tasks",
         "app.workers.mail_tasks",
         "app.workers.scheduled_tasks",
+        "app.workers.import_tasks",
     ],
 )
 
@@ -43,6 +44,7 @@ celery_app.conf.update(
         "app.workers.ai_tasks.*": {"queue": "ai"},
         "app.workers.mail_tasks.*": {"queue": "mail"},
         "app.workers.scheduled_tasks.*": {"queue": "default"},
+        "app.workers.import_tasks.*": {"queue": "default"},
     },
     beat_schedule={
         # 每日 03:15 触发所有定时备份任务
