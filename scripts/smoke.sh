@@ -5,7 +5,13 @@
 # ============================================================
 set -euo pipefail
 
-cd "$(dirname "$0")"
+# 本脚本在 <repo>/scripts/ 下，后端根目录是 <repo>/server/。
+# 必须按脚本位置解析后 cd 到 server/：alembic.ini、data/、.install_done 都在这里。
+# （历史 bug：只 cd 到 scripts/ 会导致迁移检查/安装检查全部指错路径。）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_DIR="$(cd "$SCRIPT_DIR/../server" && pwd)"
+cd "$SERVER_DIR"
+echo "后端目录: $SERVER_DIR"
 
 echo "=== 1. 依赖检查 ==="
 python -c "import fastapi, uvicorn, sqlalchemy, psycopg2, redis, celery" || { echo "缺失依赖，请 pip install -r requirements.txt"; exit 1; }
@@ -21,8 +27,9 @@ echo "=== 3. Redis 可用 ==="
 redis-cli ping | grep -q PONG && echo "✓ Redis OK" || { echo "Redis 不可用"; exit 1; }
 
 echo "=== 4. Alembic 迁移 ==="
+# 显式指定 server/ 下的 alembic.ini（env.py 会用 .env 里的 DATABASE_URL 覆盖占位值）
 if [ -f data/.install_done ]; then
-  alembic upgrade head >/dev/null && echo "✓ Alembic OK" || { echo "迁移失败"; exit 1; }
+  alembic -c alembic.ini upgrade head >/dev/null && echo "✓ Alembic OK" || { echo "迁移失败"; exit 1; }
 fi
 
 echo "=== 5. 安装向导 ==="
