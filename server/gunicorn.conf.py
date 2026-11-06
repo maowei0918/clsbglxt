@@ -29,7 +29,11 @@ max_requests_jitter = 50
 
 # 环境变量（.env 路径）
 # gunicorn 会自动读 .env 里的 CLGLXT_* 变量
-preload = true
+preload = True
+
+# gunicorn 26 的 control socket 在 systemd 下无权限（默认 /run/user/0），
+# 不用该功能，显式关闭避免每次启动报 Permission denied。
+control_socket_disable = True
 # env_file = ".env"
 
 # 启动前执行 Alembic upgrade
