@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- clglxt APP 的 FileProvider：允许网页把压缩后的照片 Uri 交还（Android 7+ 强制要求）。 -->
+<paths>
+    <cache-path name="camera" path="." />
+    <files-path name="photos" path="." />
+</paths>

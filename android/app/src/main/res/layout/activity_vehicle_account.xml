@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F6F8">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <EditText
+            android:id="@+id/et_plate"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:hint="车牌号，如 粤B12345"
+            android:inputType="textCapCharacters"
+            android:singleLine="true"
+            android:background="#FFFFFF" />
+
+        <Button
+            android:id="@+id/btn_query"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="查询台账" />
+
+        <TextView
+            android:id="@+id/tv_stats"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:padding="16dp"
+            android:background="#FFFFFF"
+            android:textSize="15sp"
+            android:lineSpacingExtra="6dp"
+            android:textColor="#1F2937" />
+
+        <TextView
+            android:id="@+id/tv_warnings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:padding="14dp"
+            android:background="#FFF8E6"
+            android:textColor="#8A5A00"
+            android:textSize="14sp"
+            android:lineSpacingExtra="5dp"
+            android:visibility="gone" />
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,27 @@
+# /etc/systemd/system/clglxt-beat.service
+[Unit]
+Description=clglxt Celery Beat (定时任务调度)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=__WEB_USER__
+Group=__WEB_USER__
+WorkingDirectory=__PROJECT_ROOT__
+EnvironmentFile=__PROJECT_ROOT__/.env
+Environment=PATH=__PROJECT_ROOT__/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__PROJECT_ROOT__/.venv/bin/celery -A app.celery_app beat -l info --schedule __PROJECT_ROOT__/celerybeat-schedule
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=10
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__PROJECT_ROOT__/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# /etc/systemd/system/clglxt-web.service
+[Unit]
+Description=clglxt Web (gunicorn + uvicorn)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=notify
+User=__WEB_USER__
+Group=__WEB_USER__
+WorkingDirectory=__PROJECT_ROOT__
+EnvironmentFile=__PROJECT_ROOT__/.env
+Environment=PATH=__PROJECT_ROOT__/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__PROJECT_ROOT__/.venv/bin/gunicorn app.main:app -c gunicorn.conf.py
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__PROJECT_ROOT__/data __LOG_DIR__
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# /etc/systemd/system/clglxt-worker.service
+[Unit]
+Description=clglxt Celery Worker
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=notify
+User=__WEB_USER__
+Group=__WEB_USER__
+WorkingDirectory=__PROJECT_ROOT__
+EnvironmentFile=__PROJECT_ROOT__/.env
+Environment=PATH=__PROJECT_ROOT__/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__PROJECT_ROOT__/.venv/bin/celery -A app.celery_app worker -l info -Q default,backup,ai,mail,notify -P threads -c ${CLGLXT_CELERY_WORKER_CONCURRENCY:-2} --max-tasks-per-child 200
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=30
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=__PROJECT_ROOT__/data
+
+[Install]
+WantedBy=multi-user.target

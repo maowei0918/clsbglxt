@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>clglxt · 服务未启动</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:"PingFang SC","Microsoft YaHei",sans-serif; background:linear-gradient(135deg,#0f172a 0%,#1e293b 55%,#0c4a6e 100%); min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+.card { background:#fff; border-radius:16px; padding:36px 40px; width:100%; max-width:520px; box-shadow:0 25px 60px rgba(0,0,0,.35); }
+.icon { font-size:42px; margin-bottom:14px; }
+h2 { font-size:20px; margin-bottom:10px; color:#1e293b; }
+p { color:#64748b; font-size:14px; margin-bottom:18px; line-height:1.6; }
+pre { background:#0f172a; color:#22d3ee; padding:14px 18px; border-radius:8px; font-size:13px; font-family:monospace; overflow-x:auto; margin-bottom:20px; white-space:pre-wrap; word-break:break-all; }
+button { background:linear-gradient(135deg,#0ea5e9,#22d3ee); color:#fff; border:none; padding:10px 24px; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; }
+button:hover { opacity:0.9; }
+.tip { color:#94a3b8; font-size:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+<div class="card">
+    <div class="icon">🚗</div>
+    <h2>clglxt 服务未启动</h2>
+    <p>后端 Python 服务未运行。请在终端执行以下命令启动：</p>
+    <pre>cd /path/to/clglxt/server
+bash deploy/deploy.sh</pre>
+    <button onclick="check()">重新检测</button>
+    <p class="tip">首次部署需确保已安装 PostgreSQL 和 Redis</p>
+</div>
+<script>
+function check() {
+    fetch('/api/healthz').then(r => {
+        if (r.ok) { location.href = '/'; }
+        else { location.reload(); }
+    }).catch(() => location.reload());
+}
+check();
+</script>
+</body>
+</html>

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/drawer"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="#F5F6F8">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="12dp"
+            android:gravity="center_vertical"
+            android:background="#2563EB">
+
+            <TextView
+                android:id="@+id/nav_toggle"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:text="☰"
+                android:textSize="22sp"
+                android:textColor="#FFFFFF"
+                android:gravity="center" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="车辆维修管理系统"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/welcome"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="你好"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="#1F2937" />
+
+                <TextView
+                    android:id="@+id/server_info"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="站点："
+                    android:textSize="13sp"
+                    android:textColor="#6B7280" />
+
+                <GridLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:columnCount="2">
+
+                    <Button
+                        android:layout_width="0dp"
+                        android:layout_height="96dp"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="6dp"
+                        android:text="车辆管理"
+                        android:onClick="openVehicles" />
+
+                    <Button
+                        android:layout_width="0dp"
+                        android:layout_height="96dp"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="6dp"
+                        android:text="用车记录"
+                        android:onClick="openVehicleUses" />
+
+                    <Button
+                        android:layout_width="0dp"
+                        android:layout_height="96dp"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="6dp"
+                        android:text="一车一账"
+                        android:onClick="openVehicleAccount" />
+
+                    <Button
+                        android:layout_width="0dp"
+                        android:layout_height="96dp"
+                        android:layout_columnWeight="1"
+                        android:layout_margin="6dp"
+                        android:text="站点设置"
+                        android:onClick="openServerConfig" />
+                </GridLayout>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+
+    <com.google.android.material.navigation.NavigationView
+        android:id="@+id/nav"
+        android:layout_width="280dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        app:menu="@menu/main" />
+</androidx.drawerlayout.widget.DrawerLayout>

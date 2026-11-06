@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <group android:checkableBehavior="single">
+        <item android:id="@+id/menu_vehicles" android:title="车辆管理" />
+        <item android:id="@+id/menu_vehicle_uses" android:title="用车记录" />
+        <item android:id="@+id/menu_vehicle_account" android:title="一车一账" />
+    </group>
+    <group android:title="维修">
+        <item android:id="@+id/menu_repairs" android:title="维修工单" />
+        <item android:id="@+id/menu_contracts" android:title="合同" />
+        <item android:id="@+id/menu_suppliers" android:title="供应商" />
+    </group>
+    <group android:title="组织">
+        <item android:id="@+id/menu_users" android:title="用户" />
+        <item android:id="@+id/menu_departments" android:title="部门" />
+        <item android:id="@+id/menu_roles" android:title="角色" />
+        <item android:id="@+id/menu_my_shop" android:title="我的店铺" />
+    </group>
+    <group android:title="监控">
+        <item android:id="@+id/menu_fence" android:title="围栏" />
+        <item android:id="@+id/menu_checks" android:title="日检" />
+        <item android:id="@+id/menu_notifications" android:title="通知" />
+    </group>
+    <group android:title="系统">
+        <item android:id="@+id/menu_backup" android:title="备份" />
+        <item android:id="@+id/menu_settings" android:title="设置" />
+        <item android:id="@+id/menu_server" android:title="站点设置" />
+        <item android:id="@+id/menu_logout" android:title="退出登录" />
+    </group>
+</menu>
