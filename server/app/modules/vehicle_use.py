@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.deps import DeptChecker, get_current_user
-from ..models import Department, TempVehicleUse, User, Vehicle
+from ..core.deps import DeptChecker, get_current_user, require_perm
+from ..models import Department, TempVehicleUse, User, Vehicle, now as db_now
 
 log = logging.getLogger("clglxt.vehicle_use")
 router = APIRouter(prefix="/vehicle-use", tags=["vehicle-use"])
@@ -30,12 +30,14 @@ def list_uses(
     keyword: str = "",
     start_date_from: str = "", start_date_to: str = "",
     department_id: int | None = None,
+    include_archived: bool = False,
     limit: int = Query(50, le=200), offset: int = 0,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """列临时用车记录（部门隔离）。
 
+    默认隐藏已归档记录；传 include_archived=true 可一并查看。
     防 IDOR：客户端显式传 department_id 不再被视为放行条件——
     非超管只能看本部门（有 data:scope_all 或汽修厂服务范围的按 DeptChecker 判定）。
     """
@@ -43,6 +45,8 @@ def list_uses(
     # 统一部门隔离：显式传 department_id 也要过可见性校验
     q = DeptChecker(current_user, db).apply_dept_filter(
         q, TempVehicleUse.department_id, department_id)
+    if not include_archived:
+        q = q.filter(TempVehicleUse.archived.is_(False))
     if keyword.strip():
         q = q.filter(TempVehicleUse.plate_no.like(f"%{keyword.strip().upper()}%"))
     # 字符串直接与 Date 列比较在 PostgreSQL 下会报类型错误，先转 date
@@ -125,6 +129,40 @@ def delete_use(use_id: int, db: Session = Depends(get_db),
     return {"ok": True}
 
 
+@router.post("/{use_id}/archive", dependencies=[Depends(require_perm("vehicle:manage"))])
+def archive_use(use_id: int, db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)):
+    """归档一条临时用车记录（保留数据，列表默认不展示）。"""
+    use = db.get(TempVehicleUse, use_id)
+    if not use:
+        raise HTTPException(404, "记录不存在")
+    DeptChecker(current_user, db).check_dept(use.department_id, "该记录")
+    if use.archived:
+        return {"ok": True, "archived": True}  # 幂等
+    use.archived = True
+    use.archived_at = db_now()
+    db.commit()
+    log.info("临时用车记录 %s 已归档（操作人 %s）", use.id, current_user.id)
+    return {"ok": True, "archived": True}
+
+
+@router.post("/{use_id}/restore", dependencies=[Depends(require_perm("vehicle:manage"))])
+def restore_use(use_id: int, db: Session = Depends(get_db),
+                current_user: User = Depends(get_current_user)):
+    """恢复一条已归档的临时用车记录。"""
+    use = db.get(TempVehicleUse, use_id)
+    if not use:
+        raise HTTPException(404, "记录不存在")
+    DeptChecker(current_user, db).check_dept(use.department_id, "该记录")
+    if not use.archived:
+        return {"ok": True, "archived": False}  # 幂等
+    use.archived = False
+    use.archived_at = None
+    db.commit()
+    log.info("临时用车记录 %s 已恢复（操作人 %s）", use.id, current_user.id)
+    return {"ok": True, "archived": False}
+
+
 def _out_use(u: TempVehicleUse) -> dict:
     return {
         "id": u.id, "plate_no": u.plate_no,
@@ -139,4 +177,6 @@ def _out_use(u: TempVehicleUse) -> dict:
         "remark": u.remark,
         "created_by": u.created_by,
         "created_at": u.created_at.isoformat() if u.created_at else None,
+        "archived": bool(u.archived),
+        "archived_at": u.archived_at.isoformat() if u.archived_at else None,
     }

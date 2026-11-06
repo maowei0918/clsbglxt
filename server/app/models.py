@@ -561,6 +561,8 @@ class TempVehicleUse(Base):
     remark: Mapped[str] = mapped_column(String(255), default="")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     vehicle_type = relationship("VehicleType")
     department = relationship("Department")

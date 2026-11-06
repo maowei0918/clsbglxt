@@ -71,6 +71,10 @@ MIN_FREE_MB = int(os.getenv("CLGLXT_MIN_FREE_MB", "1024"))
 AUDIT_RETENTION_DAYS = int(os.getenv("CLGLXT_AUDIT_RETENTION_DAYS", "180"))
 AUDIT_MIDDLEWARE_DEDUP_SECONDS = int(os.getenv("CLGLXT_AUDIT_DEDUP_SECONDS", "60"))
 
+# ── 临时用车 ──
+# 临时用车记录 end_date 超过 N 天后自动归档（0 表示不自动归档）
+VEHICLE_USE_AUTO_ARCHIVE_DAYS = int(os.getenv("CLGLXT_VEHICLE_USE_AUTO_ARCHIVE_DAYS", "30"))
+
 # ── AI ──
 AI_DAILY_QUOTA = int(os.getenv("CLGLXT_AI_DAILY_QUOTA", "20"))
 

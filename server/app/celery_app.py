@@ -55,5 +55,10 @@ celery_app.conf.update(
             "task": "app.workers.scheduled_tasks.purge_old_audit_logs",
             "schedule": 86400 * 7,
         },
+        # 每日 05:10 归档过期的临时用车记录（end_date 超过 N 天）
+        "auto-archive-vehicle-use": {
+            "task": "app.workers.scheduled_tasks.auto_archive_expired_vehicle_uses",
+            "schedule": 86400,
+        },
     },
 )
