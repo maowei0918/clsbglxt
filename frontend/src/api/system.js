@@ -6,9 +6,6 @@ export function listFenceAlerts(params) {
 export function listFencePoints() {
   return http.get('/fence/points')
 }
-export function listVehicleUse() {
-  return http.get('/vehicle_use')
-}
 export function listVehicleAccount() {
   return http.get('/vehicle_account')
 }
