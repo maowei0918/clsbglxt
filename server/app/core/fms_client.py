@@ -19,7 +19,8 @@ from urllib.parse import urlparse
 import httpx
 
 from .config import (FMS_API_KEY, FMS_BASE_URL, FMS_MAX_RETRIES,
-                     FMS_PAGE_SIZE, FMS_TIMEOUT, SSRF_ALLOWED_HOSTS)
+                     FMS_PAGE_SIZE, FMS_RATE_LIMIT_RETRIES,
+                     FMS_RATE_LIMIT_WAIT, FMS_TIMEOUT, SSRF_ALLOWED_HOSTS)
 
 log = logging.getLogger("clglxt.fms.client")
 
@@ -68,21 +69,58 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {FMS_API_KEY}", "Accept": "application/json"}
 
 
+def _retry_after(resp: httpx.Response) -> float | None:
+    """解析 429 的 Retry-After 头（秒或 HTTP 日期），解析不出返回 None。"""
+    raw = (resp.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(raw)
+        if dt is None:
+            return None
+        return max(0.0, dt.timestamp() - time.time())
+    except (TypeError, ValueError):
+        return None
+
+
 def _request(path: str, params: dict | None = None) -> dict:
-    """带重试的 GET，返回 JSON。"""
+    """带重试的 GET，返回 JSON。
+
+    429（限频）与网络错误分开退避：
+      * 429：FMS 是「每密钥每分钟 60 次」滑动窗口，短退避（1/2/4/8 秒）
+        根本等不出窗口，实测 4 次重试全 429 后整批失败。因此按
+        Retry-After 或 FMS_RATE_LIMIT_WAIT（缺省 60 秒，即一个完整窗口）
+        等待，重试次数单独用 FMS_RATE_LIMIT_RETRIES 控制。
+      * 网络错误：指数退避 2**attempt。
+    """
     _check_config()
     _check_host()
     url = f"{FMS_BASE_URL}/api/v2/open/{path}"
     last_err: Exception | None = None
-    for attempt in range(FMS_MAX_RETRIES + 1):
+    rate_hits = 0
+    attempt = 0
+    while attempt <= FMS_MAX_RETRIES:
         try:
             resp = httpx.get(url, params=params or {}, headers=_headers(),
                              timeout=FMS_TIMEOUT, follow_redirects=False)
             if resp.status_code == 429:
-                # FMS 侧限频：退避后重试
-                wait = 2 ** attempt
-                log.warning("FMS 限频(429)，%s 秒后重试 path=%s", wait, path)
+                rate_hits += 1
+                if rate_hits > FMS_RATE_LIMIT_RETRIES:
+                    raise FmsHttpError(
+                        f"FMS 限频未恢复（429，已等待重试 {FMS_RATE_LIMIT_RETRIES} 次）"
+                        f"：请调大 CLGLXT_FMS_PAGE_SIZE 或降低并发，path={path}")
+                wait = _retry_after(resp)
+                if wait is None:
+                    wait = FMS_RATE_LIMIT_WAIT
+                log.warning("FMS 限频(429)，%.0f 秒后重试 path=%s（第 %s/%s 次）",
+                            wait, path, rate_hits, FMS_RATE_LIMIT_RETRIES)
                 time.sleep(wait)
+                attempt += 1
                 continue
             if resp.status_code == 401:
                 raise FmsHttpError("FMS 密钥无效或已撤销（401）")
@@ -98,6 +136,9 @@ def _request(path: str, params: dict | None = None) -> dict:
                 wait = 2 ** attempt
                 log.warning("请求失败(%s)，%s 秒后重试 path=%s", e, wait, path)
                 time.sleep(wait)
+                attempt += 1
+                continue
+            break
     raise FmsHttpError(f"请求失败，已重试 {FMS_MAX_RETRIES} 次：{last_err}")
 
 

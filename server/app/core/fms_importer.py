@@ -690,10 +690,16 @@ def run_import(scopes: list[str] | None = None, batch_size: int = 100,
             except Exception as e:  # noqa: BLE001
                 db.rollback()
                 log.exception("scope 导入失败 scope=%s", scope)
-                update_progress(state="error",
-                                errors=[{"scope": scope,
-                                         "error": f"scope 失败：{str(e)[:200]}"}])
-                continue
+                # 失败即中断：后续 scope（repairs/daily_checks）依赖本 scope
+                # 的 ID 映射，映射缺失时它们只会把整批数据当脏数据跳过，
+                # 最终状态仍显示 done —— 停机窗口里这是最危险的静默失败。
+                # 置 error 并 break，让调用方重试整批，而不是带着残缺数据继续。
+                st["state"] = "error"
+                st["scope"] = scope
+                st["message"] = f"scope 失败：{scope}（{str(e)[:200]}）"
+                st["errors"] = [{"scope": scope, "error": st["message"]}]
+                update_progress(**st)
+                break
             total_created += res["created"]
             total_updated += res["updated"]
             total_skipped += res["skipped"]

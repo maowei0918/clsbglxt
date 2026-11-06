@@ -102,3 +102,8 @@ FMS_PAGE_SIZE = int(os.getenv("CLGLXT_FMS_PAGE_SIZE", "200"))
 FMS_TIMEOUT = float(os.getenv("CLGLXT_FMS_TIMEOUT", "30"))
 # 失败重试次数（指数退避）
 FMS_MAX_RETRIES = int(os.getenv("CLGLXT_FMS_MAX_RETRIES", "3"))
+# 限频(429)退避等待秒数：FMS 是「每密钥每分钟 60 次」滑动窗口，
+# 短退避等不出窗口（实测 4 次重试全 429），必须等满一个窗口
+FMS_RATE_LIMIT_WAIT = float(os.getenv("CLGLXT_FMS_RATE_LIMIT_WAIT", "60"))
+# 限频(429)重试次数上限（独立于网络错误的 FMS_MAX_RETRIES）
+FMS_RATE_LIMIT_RETRIES = int(os.getenv("CLGLXT_FMS_RATE_LIMIT_RETRIES", "3"))

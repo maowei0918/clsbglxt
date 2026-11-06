@@ -312,3 +312,114 @@ def test_status_shape_matches_documented_contract(fake_redis):
     for key in ("running", "total", "done", "current_step", "errors"):
         assert key in st, f"状态缺少字段 {key}"
     assert st["running"] is False
+
+
+# ───────────────────── 缺陷回归（真 FMS 实测暴露） ─────────────────────
+
+
+def test_scope_failure_sets_error_and_stops(db, seeded_user, fake_redis, monkeypatch):
+    """scope 拉取失败必须置 state=error 并中断，不能静默 continue。
+
+    实测教训：vehicles 因 429 失败后继续跑 repairs/daily_checks，
+    映射缺失导致整批被当脏数据跳过，最终状态仍显示 done —— 停机窗口里
+    「以为成功、实际主数据全丢」。修复后必须 error + 后续 scope 不执行。
+    """
+    from app.core import fms_importer as imp
+    from app.core.fms_importer import run_import
+
+    executed: list[str] = []
+
+    def fake_iter_items(scope, **kw):
+        executed.append(scope)
+        if scope == "vehicles":
+            raise RuntimeError("FMS 限频未恢复（429）")
+        return iter([])
+
+    monkeypatch.setattr(imp, "iter_items", fake_iter_items)
+
+    st = run_import(scopes=["vehicles", "repairs", "daily_checks"],
+                    db_factory=lambda: db)
+
+    assert st["state"] == "error", f"失败却报 {st['state']}：{st.get('message')}"
+    assert st["scope"] == "vehicles"
+    assert "429" in st["message"]
+    assert executed == ["vehicles"], f"失败后仍继续跑了后续 scope：{executed}"
+
+
+def test_429_waits_full_window(monkeypatch):
+    """429 退避必须等满 FMS 的 60 秒窗口，不能只等 1/2/4/8 秒。
+
+    实测教训：FMS 是 60 次/60 秒滑动窗口，短退避 4 次重试全部仍 429。
+    """
+    import httpx
+    from app.core import fms_client as fc
+
+    def resp(code, headers=None, body=None):
+        r = httpx.Response(code, headers=headers or {}, json=body or {})
+        r.request = httpx.Request("GET", "http://x/api/v2/open/vehicles")
+        return r
+
+    waited: list[float] = []
+    responses = [resp(429), resp(200, body={"items": [], "total": 0})]
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr(fc.httpx, "get", fake_get)
+    monkeypatch.setattr(fc.time, "sleep", lambda s: waited.append(s))
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_WAIT", 60.0)
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_RETRIES", 3)
+    monkeypatch.setattr(fc, "_check_config", lambda: None)
+    monkeypatch.setattr(fc, "_check_host", lambda: None)
+
+    result = fc._request("vehicles", {"offset": 0, "limit": 1})
+
+    assert result["total"] == 0
+    assert len(calls) == 2, "应重试一次后成功"
+    assert waited == [60.0], f"退避未按窗口等待：{waited}"
+
+
+def test_429_retry_after_header_wins(monkeypatch):
+    """服务端给了 Retry-After 就听服务端的，不用默认 60 秒。"""
+    import httpx
+    from app.core import fms_client as fc
+
+    def resp(code, headers=None):
+        r = httpx.Response(code, headers=headers or {}, json={})
+        r.request = httpx.Request("GET", "http://x/api/v2/open/vehicles")
+        return r
+
+    waited: list[float] = []
+    responses = [resp(429, {"Retry-After": "5"}), resp(200)]
+    monkeypatch.setattr(fc.httpx, "get", lambda url, **kw: responses.pop(0))
+    monkeypatch.setattr(fc.time, "sleep", lambda s: waited.append(s))
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_WAIT", 60.0)
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_RETRIES", 3)
+    monkeypatch.setattr(fc, "_check_config", lambda: None)
+    monkeypatch.setattr(fc, "_check_host", lambda: None)
+
+    fc._request("vehicles")
+    assert waited == [5.0], f"应优先采用 Retry-After：{waited}"
+
+
+def test_429_exhausted_raises_clear_error(monkeypatch):
+    """限频重试耗尽要抛明确错误，不要伪装成网络失败（last_err=None）。"""
+    import httpx
+    import pytest
+    from app.core import fms_client as fc
+
+    waited: list[float] = []
+    monkeypatch.setattr(fc.httpx, "get",
+                        lambda url, **kw: httpx.Response(429, headers={}))
+    monkeypatch.setattr(fc.time, "sleep", lambda s: waited.append(s))
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_WAIT", 60.0)
+    monkeypatch.setattr(fc, "FMS_RATE_LIMIT_RETRIES", 2)
+    monkeypatch.setattr(fc, "FMS_MAX_RETRIES", 3)
+    monkeypatch.setattr(fc, "_check_config", lambda: None)
+    monkeypatch.setattr(fc, "_check_host", lambda: None)
+
+    with pytest.raises(fc.FmsHttpError, match="限频未恢复"):
+        fc._request("vehicles")
+    assert waited == [60.0, 60.0], f"重试次数不对：{waited}"
