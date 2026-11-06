@@ -242,9 +242,11 @@ cd server && pytest tests/ -q && python scripts/mutation_check.py
 
 ## 八、文档
 
-- `docs/deploy.md` — 生产部署（宝塔 + systemd + nginx）
+- `docs/production-deploy-guide.md` — **生产部署与灰度上线指南**（验收门禁 + 排错 + 回滚，上线先看这个）
+- `docs/deploy.md` — 生产部署安装步骤（宝塔 + systemd + nginx）
+- `docs/go-live-checklist.md` — 上线检查表（逐项打勾）
 - `docs/deploy-plan.md` — 部署方案与取舍
-- `docs/go-live-checklist.md` — 上线检查表
+- `docs/memory-tuning.md` — 内存/并发档位调优
 - `docs/review-report-v1.md` — 代码审查报告
 
 ---
