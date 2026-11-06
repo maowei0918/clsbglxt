@@ -115,6 +115,17 @@ for svc in clglxt-web clglxt-worker clglxt-beat; do
 done
 systemctl daemon-reload
 
+# ── 5.5 日志轮转（防止 gunicorn 日志无限增长写满磁盘）──
+if [[ -f "$PROJECT_ROOT/deploy/clglxt.logrotate" ]]; then
+    sed -e "s|/var/log/clglxt|$LOG_DIR|g" \
+        -e "s|www www|$WEB_USER $WEB_USER|g" \
+        "$PROJECT_ROOT/deploy/clglxt.logrotate" > /etc/logrotate.d/clglxt
+    chmod 644 /etc/logrotate.d/clglxt
+    echo "== ✓ 日志轮转已配置（/etc/logrotate.d/clglxt，保留 14 天）"
+else
+    echo "== ! 未找到 clglxt.logrotate，跳过日志轮转"
+fi
+
 # ── 6. nginx（可选：传域名则自动配）──
 if [[ -n "${CLGLXT_DOMAIN:-}" ]]; then
     echo "== 配置 nginx：$CLGLXT_DOMAIN"

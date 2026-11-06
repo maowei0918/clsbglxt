@@ -1,0 +1,21 @@
+# ============================================================
+# clglxt 日志轮转配置
+# 用法：deploy/deploy.sh 会自动安装到 /etc/logrotate.d/clglxt
+# 手动：sudo cp deploy/clglxt.logrotate /etc/logrotate.d/clglxt
+# 注意：logrotate 不支持行内注释（# 必须独占一行）
+# ============================================================
+
+/var/log/clglxt/*.log {
+    daily
+    rotate 14
+    maxsize 100M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0644 www www
+    sharedscripts
+    postrotate
+        systemctl kill -s HUP clglxt-web 2>/dev/null || true
+    endscript
+}
