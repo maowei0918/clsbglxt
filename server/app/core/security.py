@@ -16,10 +16,28 @@ import jwt
 from .config import (ACCESS_TOKEN_EXPIRE_MINUTES, JWT_ALGORITHM, JWT_SECRET,
                      MEDIA_TOKEN_EXPIRE_MINUTES)
 
-# 防御：密钥为空/默认值时，用进程内随机密钥兜底，避免用可预测密钥签发 token。
+# 占位符密钥特征。仅用「固定黑名单」不够：.env.example 里的示例值
+# change-this-to-a-32-byte-random-string 长度 38 ≥ 32，不在旧黑名单里，
+# 却能通过全部启动校验 —— 运维照抄示例即用公开字符串签发 token，
+# 攻击者可离线伪造超管。改为「特征匹配 + 长度」双重判定。
+_PLACEHOLDER_MARKERS = (
+    "change-this", "change_me", "changeme", "change-me",
+    "dev-only", "insecure", "your-secret", "placeholder",
+    "xxxx", "1234567890", "example",
+)
+
+
+def is_placeholder_secret(value: str) -> bool:
+    """判断密钥是否为占位符/示例值（用于启动期拒绝）。"""
+    if not value:
+        return True
+    low = value.strip().lower()
+    return any(m in low for m in _PLACEHOLDER_MARKERS)
+
+
+# 防御：密钥为空/占位符时，用进程内随机密钥兜底，避免用可预测密钥签发 token。
 # 已安装状态下 main.py 的 lifespan 会直接拒绝启动，因此生产不会走到这里。
-if not JWT_SECRET or JWT_SECRET in ("change-this-in-production",
-                                    "dev-only-insecure-secret"):
+if is_placeholder_secret(JWT_SECRET):
     JWT_SECRET = secrets.token_hex(32)
 
 

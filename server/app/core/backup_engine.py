@@ -2,9 +2,12 @@
 
 设计：
   * PostgreSQL → pg_dump --format=custom -Z9 > <target>/clglxt_<ts>.dump
-  * SQLite     → shutil.copy2(clglxt.db, <target>/clglxt_<ts>.db)
+  * SQLite     → 复制 DATABASE_URL 指向的库文件到 <target>/clglxt_<ts>.db
   * 同时打包 data/uploads/ 到 <target>/uploads_<ts>.tar.gz
   * 写入 BackupRun 执行情况，并按 job.keep_count 清理旧备份
+
+连接串：必须用 URL 对象（make_url）解析，禁止 str(engine.url)——
+SQLAlchemy 2.x 的 str(URL) 会把密码渲染成 ***，导致 pg_dump 认证失败。
 """
 import logging
 import os
@@ -15,10 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from ..core.config import DATABASE_URL, DATA_DIR, UPLOAD_DIR, BACKUP_DIR
+from ..core.config import DATA_DIR, UPLOAD_DIR, BACKUP_DIR
 from ..models import BackupJob, BackupRun, BackupTarget
 
 log = logging.getLogger("clglxt.backup")
@@ -53,9 +54,42 @@ def _dump_postgres(db_url: str, out_path: Path) -> None:
         "-Z9",
         "-f", str(out_path),
     ]
+    # 排除表（限频/缓存类临时表不值得进备份，还能显著减小产物）
+    from .config import BACKUP_SKIP_TABLES
+    for tbl in BACKUP_SKIP_TABLES:
+        tbl = tbl.strip()
+        if tbl:
+            cmd += ["--exclude-table", tbl]
     r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=1800)
     if r.returncode != 0:
         raise RuntimeError(f"pg_dump 失败: {r.stderr[:300]}")
+
+
+def _verify_dump(out_path, dialect: str) -> None:
+    """备份产物完整性校验：文件非空 + 可被还原工具读取。
+
+    没有这一步，pg_dump 失败/半途磁盘写满都可能留下损坏文件，
+    而备份流程仍报 success——恢复时才发现，等于没有备份。
+    """
+    out_path = Path(out_path)
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError(f"备份产物为空或不存在: {out_path.name}")
+    if dialect in _PG_PROTO:
+        r = subprocess.run(["pg_restore", "--list", str(out_path)],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"备份产物损坏（pg_restore --list 失败）: {out_path.name} "
+                f"{r.stderr[:200]}")
+    else:
+        # SQLite：能否打开并读到 schema
+        import sqlite3
+        try:
+            conn = sqlite3.connect(f"file:{out_path}?mode=ro", uri=True)
+            conn.execute("SELECT count(*) FROM sqlite_master")
+            conn.close()
+        except sqlite3.Error as e:
+            raise RuntimeError(f"备份产物损坏（SQLite 无法读取）: {out_path.name} {e}")
 
 
 def _dump_sqlite(db_url: str, out_path: Path) -> None:
@@ -69,6 +103,18 @@ def _dump_sqlite(db_url: str, out_path: Path) -> None:
     if not os.path.exists(src):
         raise RuntimeError(f"SQLite 文件不存在: {src}")
     shutil.copy2(src, str(out_path))
+
+
+def _estimate_dump_bytes(db) -> int:
+    """估算 dump 产物大小。PG 用库大小，SQLite 用文件大小；失败则给保守值。"""
+    try:
+        from sqlalchemy import text
+        size = db.execute(text("SELECT pg_database_size(current_database())")).scalar()
+        if size:
+            return int(size) * 2
+    except Exception:
+        pass
+    return 512 * 1024 * 1024  # 保守估计 512MB
 
 
 def _pack_uploads(out_path: Path) -> bool:
@@ -102,6 +148,14 @@ def run_backup(job_id: int, operator_id: int = 0, trigger: str = "manual") -> di
         dest_dir = Path(target.base_path or str(BACKUP_DIR))
         dest_dir.mkdir(parents=True, exist_ok=True)
 
+        # 磁盘余量保护：备份写满磁盘会连带拖垮数据库（WAL 无处可写）。
+        # 按库大小的 2 倍 + 保留余量估算，不足则直接失败而不是产出半截文件。
+        from .image_utils import ensure_free_space
+        try:
+            ensure_free_space(dest_dir, _estimate_dump_bytes(db))
+        except ValueError as e:
+            raise RuntimeError(f"备份中止：{e}") from e
+
         ts = _TS()
         run = BackupRun(
             job_id=job.id, job_name=job.name, trigger=trigger,
@@ -112,13 +166,19 @@ def run_backup(job_id: int, operator_id: int = 0, trigger: str = "manual") -> di
         run_id = run.id
 
         # 数据库（从应用引擎取的 URL，同源）
-        db_url = str(app_engine.url)
+        # 注意：必须 render_as_string(hide_password=False)。
+        # str(URL) 在 SQLAlchemy 2.x 会把密码渲染成 "***"，
+        # 传下去会让 pg_dump 认证失败 → 备份永远失败且静默。
+        db_url = app_engine.url.render_as_string(hide_password=False)
         db_out = dest_dir / f"clglxt_{ts}.dump"
         dialect, _ = _parse_db_url(db_url)
         if dialect in _PG_PROTO:
             _dump_postgres(db_url, db_out)
         else:
             _dump_sqlite(db_url, db_out)
+
+        # 完整性校验：产不出可还原的文件就算失败（不写 success）
+        _verify_dump(db_out, dialect)
 
         run.files_done += 1
         run.files_total += 1

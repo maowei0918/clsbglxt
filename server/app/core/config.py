@@ -61,7 +61,10 @@ MUST_CHANGE_ALLOWED = (
 # ── 安全 ──
 CORS_ORIGINS = os.getenv("CLGLXT_CORS_ORIGINS", "").split(",") if os.getenv("CLGLXT_CORS_ORIGINS") else []
 # 可信代理（取真实 IP）。逗号分隔的 IP/网段。
-TRUSTED_PROXIES = os.getenv("CLGLXT_TRUSTED_PROXIES", "127.0.0.1,::1").split(",")
+TRUSTED_PROXIES = [
+    s.strip() for s in os.getenv(
+        "CLGLXT_TRUSTED_PROXIES", "127.0.0.1,::1").split(",") if s.strip()
+]
 # 上传限制
 MAX_UPLOAD_MB = int(os.getenv("CLGLXT_MAX_UPLOAD_MB", "50"))
 MAX_ORDER_UPLOAD_MB = int(os.getenv("CLGLXT_MAX_ORDER_UPLOAD_MB", "200"))

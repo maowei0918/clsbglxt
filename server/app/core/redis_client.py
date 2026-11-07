@@ -7,6 +7,7 @@
 """
 import json
 import logging
+import threading
 import time
 import uuid
 from typing import Any
@@ -92,6 +93,11 @@ def rate_limit(key: str, limit: int, window: int) -> tuple[bool, int]:
     ZREMRANGEBYSCORE 清过期、ZCARD 计数、ZADD 记录本次。
 
     原子性由 Lua 脚本保证（多个 worker 同时调用不会超发）。
+
+    Redis 不可用时**降级到进程内限频**，而不是直接放行：
+    放行等于 Redis 一挂登录爆破就没有任何限制；而直接拒绝又会
+    让所有人登不进去。进程内限频精度差（多 worker 各自计数），
+    但足以兜住单机暴力破解，且不影响可用性。
     """
     lua = """
     local key = KEYS[1]
@@ -114,11 +120,39 @@ def rate_limit(key: str, limit: int, window: int) -> tuple[bool, int]:
                         now, window * 1000, limit, member)
         return bool(r[0]), int(r[1])
     except Exception:
-        log.warning("限频检查失败 key=%s（按放行处理）", key, exc_info=True)
-        return True, limit
+        log.warning("Redis 限频失败 key=%s，降级为进程内限频", key,
+                    exc_info=True)
+        return _local_rate_limit(key, limit, window)
+
+
+# ── 进程内降级限频（Redis 不可用时） ──
+_local_lock = threading.Lock()
+_local_hits: dict[str, list[float]] = {}
+_LOCAL_MAX_KEYS = 10_000
+
+
+def _local_rate_limit(key: str, limit: int, window: int) -> tuple[bool, int]:
+    """进程内滑动窗口。多 worker 场景下每个进程各算一份，精度有限。"""
+    now = time.time()
+    cutoff = now - window
+    with _local_lock:
+        # 防止无界增长：超过阈值时整体清一次过期键
+        if len(_local_hits) > _LOCAL_MAX_KEYS:
+            for k in [k for k, v in _local_hits.items() if not v or v[-1] < cutoff]:
+                _local_hits.pop(k, None)
+        hits = [t for t in _local_hits.get(key, []) if t > cutoff]
+        if len(hits) >= limit:
+            _local_hits[key] = hits
+            return False, 0
+        hits.append(now)
+        _local_hits[key] = hits
+        return True, limit - len(hits)
 
 
 def rate_limit_reset(key: str) -> None:
+    """清除限频记录（登录成功后调用，或管理员解锁）。"""
+    with _local_lock:
+        _local_hits.pop(key, None)
     try:
         _redis.delete(f"clglxt:rl:{key}")
     except Exception:

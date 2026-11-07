@@ -66,18 +66,18 @@ check("save 200", r.status_code == 200, r.text[:80])
 check("installed 标记", c.get("/api/install/status").json()["installed"] is True)
 
 print("\n=== 2. 登录 + 改密 ===")
-l = c.post("/api/auth/login?username=admin&password=MyPass123")
+l = c.post("/api/auth/login", json={"username": "admin", "password": "MyPass123"})
 check("login 200", l.status_code == 200)
 check("must_change=True", l.json().get("user",{}).get("must_change_password") is True)
 token = l.json()["token"]
 H = {"Authorization": f"Bearer {token}"}
 
-cp = c.post("/api/auth/change-password", params={"old_password":"MyPass123","new_password":"NewPass456"}, headers=H)
+cp = c.post("/api/auth/change-password", json={"old_password": "MyPass123", "new_password": "NewPass456"}, headers=H)
 check("change-password 200", cp.status_code == 200, cp.text[:80])
 # 旧密码失效
-check("旧密码被拒", c.post("/api/auth/login?username=admin&password=MyPass123").status_code == 401)
+check("旧密码被拒", c.post("/api/auth/login", json={"username": "admin", "password": "MyPass123"}).status_code == 401)
 # 新密码可用
-l2 = c.post("/api/auth/login?username=admin&password=NewPass456")
+l2 = c.post("/api/auth/login", json={"username": "admin", "password": "NewPass456"})
 check("新密码登录 200", l2.status_code == 200)
 token2 = l2.json()["token"]
 H2 = {"Authorization": f"Bearer {token2}"}

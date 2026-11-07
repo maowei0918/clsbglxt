@@ -5,7 +5,6 @@
   * 不再兼容 fnOS 子路径，API 前缀固定 /api
 """
 import logging
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -17,7 +16,7 @@ from ..core.redis_client import rate_limit, rate_limit_reset
 from ..core.security import (create_access_token, hash_password,
                              validate_password, verify_dummy,
                              verify_password)
-from ..models import (EPOCH, Department, Role, RolePermission, Supplier, User,
+from ..models import (EPOCH, Department, RolePermission, Supplier, User,
                       UserRole)
 
 log = logging.getLogger("clglxt.auth")
@@ -29,7 +28,12 @@ _LIMIT_GLOBAL = (200, 60)      # 200 次 / 1 分钟
 
 
 async def _read_credentials(request: Request, keys: tuple = ("username", "password")) -> tuple[str, str]:
-    """从请求中读取凭据：JSON body → 表单 → query。"""
+    """从请求体读取凭据：JSON body → 表单。
+
+    刻意不支持 query 参数：密码若走 URL，会被 Nginx 与 Gunicorn 的
+    access log 以明文记录（包含完整 $request），也会进入 Referer、
+    浏览器历史与代理日志。前端与 Android 客户端均使用 JSON body。
+    """
     k1, k2 = keys
     try:
         body = await request.json()
@@ -37,13 +41,8 @@ async def _read_credentials(request: Request, keys: tuple = ("username", "passwo
             return str(body.get(k1, "")), str(body.get(k2, ""))
     except Exception:
         pass
-    # query / 表单
-    u = request.query_params.get(k1, "")
-    p = request.query_params.get(k2, "")
-    if u or p:
-        return u, p
     form = await request.form()
-    return form.get(k1, ""), form.get(k2, "")
+    return str(form.get(k1, "")), str(form.get(k2, ""))
 
 
 def client_ip(request: Request) -> str:

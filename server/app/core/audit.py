@@ -76,14 +76,22 @@ def parse_ua(ua: str) -> DeviceInfo:
 
 
 def client_ip(request: Request) -> str:
-    """取真实客户端 IP。优先 X-Forwarded-For（宝塔 Nginx 会带）。"""
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()[:64]
-    real = request.headers.get("x-real-ip", "")
-    if real:
-        return real.strip()[:64]
-    return (request.client.host if request.client else "")[:64]
+    """取真实客户端 IP（仅当直连方是可信代理时才信 XFF）。
+
+    与 modules/auth.py 的 client_ip 保持同一套信任模型：
+    X-Forwarded-For 是客户端可控的头，直接取会导致审计日志
+    IP 可被任意伪造（审计投毒），也会绕过按 IP 的限频。
+    """
+    from ..core.config import TRUSTED_PROXIES
+    direct = request.client.host if request.client else ""
+    if direct in TRUSTED_PROXIES:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()[:64]
+        real = request.headers.get("x-real-ip", "")
+        if real:
+            return real.strip()[:64]
+    return direct[:64]
 
 
 def ua_hash(ua: str) -> str:

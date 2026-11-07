@@ -17,7 +17,7 @@ DELETE /api/daily-check/photos/{photo_id}
 """
 from __future__ import annotations
 
-import io
+import inspect
 import logging
 import os
 import uuid
@@ -25,15 +25,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Request,
-                     Response, UploadFile, status)
-from fastapi.responses import StreamingResponse
+                     Response, UploadFile)
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from ..core.config import UPLOAD_DIR
 from ..core.database import get_db
 from ..core.deps import DeptChecker, get_current_user
-from ..core.image_utils import (compress_image, compress_image_async,
-                                is_allowed_image, make_thumb_async)
+from ..core.image_utils import (compress_image_async,
+                                ensure_free_space, is_allowed_image,
+                                make_thumb_async, resolve_upload_path)
 from ..models import DailyCheckPhoto, DailyCheckRecord, User, Vehicle
 
 log = logging.getLogger("clglxt.daily_check.photos")
@@ -43,16 +44,54 @@ router = APIRouter(prefix="/daily-check/photos", tags=["daily-check-photos"])
 _PHOTO_DIR = UPLOAD_DIR / "daily_check"
 _PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 
-# 上传上限（可被环境变量覆盖）
-_env_max_upload = int(os.getenv("CLGLXT_MAX_UPLOAD_MB", "20"))
+# 上传上限（统一从 config 取，避免模块内二次解析环境变量导致
+# 与 config.MAX_UPLOAD_MB 不一致 —— 那是死配置的根源）
+from ..core.config import MAX_UPLOAD_MB as _env_max_upload
 _MAX_UPLOAD_BYTES = _env_max_upload * 1024 * 1024
 _THUMB_DIM = 400
 _DEFAULT_DIM = int(os.getenv("CLGLXT_IMAGE_MAX_DIM", "1920"))
 _DEFAULT_QUALITY = int(os.getenv("CLGLXT_IMAGE_QUALITY", "78"))
 
 
+async def _read_capped(stream, limit: int, chunk: int = 256 * 1024) -> bytes | None:
+    """边读边计数，超限立刻中断，返回 None。
+
+    旧实现是 `await f.read()` 之后再比较 len()，等于先把任意大小的
+    请求体整个读进内存再拒绝 —— 100 个并发 × 不限大小 = OOM。
+    这里一旦累计超过 limit 就停止读取，内存占用有硬上限。
+
+    stream 可能是：
+      * UploadFile.file —— 同步 SpooledTemporaryFile（不能 await）
+      * Request.stream() —— 异步生成器
+    两种都要支持，否则会踩 "object bytes can't be used in 'await'"。
+    """
+    if hasattr(stream, "read") and not inspect.isasyncgen(stream):
+        # 同步文件对象：放到线程池里读，避免阻塞事件循环
+        def _sync_read() -> bytes | None:
+            buf = bytearray()
+            while True:
+                part = stream.read(chunk)
+                if not part:
+                    break
+                buf.extend(part)
+                if len(buf) > limit:
+                    return None
+            return bytes(buf)
+        return await run_in_threadpool(_sync_read)
+
+    buf = bytearray()
+    async for part in stream:
+        if not part:
+            continue
+        buf.extend(part)
+        if len(buf) > limit:
+            return None
+    return bytes(buf)
+
+
 def _store_blob(blob: bytes, mime: str) -> Path:
     """按 YYYY/MM 归档写入 UPLOAD_DIR，返回相对路径字符串。"""
+    ensure_free_space(_PHOTO_DIR, len(blob))
     now = datetime.now(timezone.utc)
     sub = _PHOTO_DIR / f"{now.year}" / f"{now.month:02d}"
     sub.mkdir(parents=True, exist_ok=True)
@@ -95,13 +134,13 @@ async def upload_photos(
         if not f.filename:
             continue
         try:
-            raw = await f.read()
-            if not raw:
-                errors.append({"filename": f.filename, "error": "空文件"})
-                continue
-            if len(raw) > _MAX_UPLOAD_BYTES:
+            raw = await _read_capped(f.file, _MAX_UPLOAD_BYTES)
+            if raw is None:
                 errors.append({"filename": f.filename,
                                "error": f"单张不能超过 {_env_max_upload} MB"})
+                continue
+            if not raw:
+                errors.append({"filename": f.filename, "error": "空文件"})
                 continue
 
             mime = (f.content_type or "").lower()
@@ -148,11 +187,13 @@ async def upload_photo_raw(
     current_user: User = Depends(get_current_user),
 ):
     """原生 body 上传（APP 端 APP 原生压缩后的 JPEG 直接 POST）。"""
-    body = await request.body()
+    # 流式读取 + 硬上限：request.body() 会先把整个 body 读进内存，
+    # 攻击者用超大 body 即可 OOM。这里超限即中断。
+    body = await _read_capped(request.stream(), _MAX_UPLOAD_BYTES)
+    if body is None:
+        raise HTTPException(413, f"body 超过 {_env_max_upload} MB")
     if not body:
         raise HTTPException(400, "body 为空")
-    if len(body) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"body 超过 {_env_max_upload} MB")
 
     content_type = request.headers.get("content-type", "image/jpeg").lower()
     if not is_allowed_image(content_type):
@@ -218,7 +259,10 @@ async def get_photo(
         DeptChecker(current_user, db).check_dept(
             veh.department_id, "照片")
 
-    disk_path = UPLOAD_DIR / photo.saved_path
+    try:
+        disk_path = resolve_upload_path(photo.saved_path)
+    except ValueError:
+        raise HTTPException(400, "照片路径非法")
     if not disk_path.exists():
         raise HTTPException(404, "照片文件丢失")
 
@@ -250,7 +294,10 @@ def delete_photo(
     if photo.record_id is not None:
         raise HTTPException(400, "该照片已关联日检记录，无法删除")
 
-    disk_path = UPLOAD_DIR / photo.saved_path
+    try:
+        disk_path = resolve_upload_path(photo.saved_path)
+    except ValueError:
+        raise HTTPException(400, "照片路径非法")
     try:
         if disk_path.exists():
             disk_path.unlink()

@@ -97,6 +97,43 @@ def is_installed() -> bool:
     return _paths["install_lock"].exists()
 
 
+def _stamp_alembic_head(engine) -> None:
+    """把 create_all 建出的库标记为当前 Alembic head。
+
+    create_all 不会写 alembic_version 表；而 deploy/update.sh 对已安装
+    站点会执行 `alembic upgrade head`。缺版本表时 upgrade 会尝试从零
+    建全部表，撞上已存在的表直接失败并触发回滚 —— 每次更新都中断服务。
+
+    做法：在 alembic_version 表中写入 head revision。用脚本目录的
+    alembic.ini + ScriptDirectory 读 head，避免依赖当前工作目录。
+    任何异常都只告警不阻断安装：建表本身已成功，stamp 失败最多导致
+    下次更新时手动 stamp 一次，不应让整个安装流程回滚。
+    """
+    try:
+        from alembic import command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        ini = BASE_DIR / "alembic.ini"
+        if not ini.exists():
+            log.warning("未找到 alembic.ini，跳过版本标记（%s）", ini)
+            return
+        cfg = Config(str(ini))
+        cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        if not head:
+            log.warning("Alembic 无 head revision，跳过版本标记")
+            return
+        # 用现有 engine 连接执行 stamp，避免 alembic 再读一次 .env/URL
+        with engine.begin() as conn:
+            cfg.attributes["connection"] = conn
+            command.stamp(cfg, head)
+        log.info("已标记 Alembic 版本为 head: %s", head)
+    except Exception:
+        log.warning("Alembic 版本标记失败（不影响安装，更新前需手动 stamp）",
+                    exc_info=True)
+
+
 # ───────────── 未认证安装接口守卫：限频 + 原子锁 ─────────────
 
 def _install_rate_limit(request: Request) -> None:
@@ -542,6 +579,13 @@ def save_install(request: Request, payload: dict):
 
         # 3. 建表（幂等）
         Base.metadata.create_all(bind=engine)
+
+        # 3b. 标记 Alembic 版本为当前 head。
+        # 不做这一步，create_all 建出的库没有 alembic_version 表，
+        # 后续 deploy/update.sh 的 `alembic upgrade head` 会因
+        # "relation already exists" 直接失败并触发回滚 ——
+        # 等于每次更新都中断服务。
+        _stamp_alembic_head(engine)
 
         # 4. seed 管理员 + 内置角色（+ 可选初始部门）
         Session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)

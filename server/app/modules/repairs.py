@@ -5,20 +5,18 @@
   * 并发控制用 SELECT FOR UPDATE 替代 CAS
 """
 import logging
-import random
-import string
+from pathlib import Path
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import DeptChecker, get_current_user, require_perm
-from ..core.config import TRUSTED_PROXIES
 from ..core.parsing import parse_date
-from ..models import (Attachment, Department, RepairAction, RepairCC, RepairOrder,
-                      RepairQuote, RepairQuoteItem, Supplier, User, Vehicle)
+from ..models import (Attachment, RepairAction, RepairOrder,
+                      Supplier, User, Vehicle)
 
 log = logging.getLogger("clglxt.repairs")
 router = APIRouter(prefix="/repairs", tags=["repairs"])
@@ -188,9 +186,13 @@ def create_order(
                         user_id=current_user.id, action="create",
                         note=description[:500]))
 
+    # 附件路径必须落在 UPLOAD_DIR 内：客户端传入的 path 不能作为
+    # 未来下载端点的任意文件读入口。拒绝绝对路径与 ../ 穿越。
     for att in (attachments or []):
+        raw_path = str(att.get("path", ""))
+        _validate_att_path(raw_path)
         db.add(Attachment(order_id=o.id, step_seq=1,
-                          saved_path=att.get("path", ""),
+                          saved_path=raw_path,
                           orig_name=att.get("orig_name", ""),
                           mime=att.get("mime", ""),
                           size=int(att.get("size", 0)),
@@ -199,6 +201,18 @@ def create_order(
     db.commit()
     _notify_new_order(db, o, v, current_user.id)
     return {"id": o.id, "order_no": o.order_no}
+
+
+def _validate_att_path(raw_path: str) -> bool:
+    """校验附件相对路径：拒绝绝对路径、.. 穿越与空字节。
+
+    客户端传的 path 不能作为未来下载端点的任意文件读入口。
+    """
+    if not raw_path or "\x00" in raw_path or Path(raw_path).is_absolute():
+        raise HTTPException(400, "附件路径非法")
+    if ".." in Path(raw_path).parts:
+        raise HTTPException(400, "附件路径非法")
+    return True
 
 
 def _gen_order_no(db: Session, user: User) -> str:

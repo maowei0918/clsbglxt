@@ -3,25 +3,19 @@
 挂载路由、安全头、审计中间件、Celery 启动。
 """
 import logging
-import os
 import re
-import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .core import audit as audit_mod
-from .core.config import (APP_TITLE, APP_VERSION, AUDIT_RETENTION_DAYS,
-                          AUDIT_MIDDLEWARE_DEDUP_SECONDS, CORS_ORIGINS,
+from .core.config import (APP_TITLE, CORS_ORIGINS,
                           DATA_DIR, DATA_DIR_PENDING, ENABLE_DOCS,
                           JWT_SECRET)
 from .core.database import health_check
-from .core.security import decode_token
+from .core.security import decode_token, is_placeholder_secret
 from .core.version import __version__
 
 log = logging.getLogger("clglxt.app")
@@ -42,6 +36,24 @@ APP_CSP = (
     "frame-ancestors 'self'"
 )
 
+def _check_env_file_permissions() -> None:
+    """已安装状态下，若 .env 对其他用户可读则拒绝启动。
+
+    .env 含 JWT_SECRET 与数据库密码。deploy.sh 只在部署时 chmod 600
+    一次，之后手工编辑/拷贝可能放宽回 644/755，同主机任意账号即可
+    读取密钥并离线伪造任意用户 token。
+    """
+    from pathlib import Path
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    mode = env_path.stat().st_mode
+    # 组或其他用户有任何权限位即视为过宽
+    if mode & 0o077:
+        raise RuntimeError(
+            f".env 权限过宽（{oct(mode & 0o777)}），拒绝启动。"
+            f"含 JWT_SECRET 与数据库密码，请执行：chmod 600 {env_path}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,16 +63,23 @@ async def lifespan(app: FastAPI):
     if not is_installed():
         log.warning("系统尚未安装，请访问 /install 完成安装向导")
     else:
-        # 生产强校验：已安装就必须有独立 JWT 密钥，禁止空值/已知默认值
-        if not JWT_SECRET or JWT_SECRET in (
-                "change-this-in-production", "dev-only-insecure-secret"):
+        # 生产强校验：已安装就必须有独立 JWT 密钥。
+        # 用特征匹配而非固定黑名单：示例文件里的占位符（如
+        # change-this-to-a-32-byte-random-string）长度够 32，
+        # 旧黑名单漏掉它，运维照抄示例即等于公开密钥。
+        if is_placeholder_secret(JWT_SECRET):
             raise RuntimeError(
-                "CLGLXT_JWT_SECRET 未配置或使用了默认值，拒绝启动。"
+                "CLGLXT_JWT_SECRET 未配置或使用了占位符/默认值，拒绝启动。"
                 "生成：openssl rand -hex 32 → 写入 server/.env → 重启")
         if len(JWT_SECRET) < 32:
             raise RuntimeError(
                 f"CLGLXT_JWT_SECRET 过短（{len(JWT_SECRET)} 字符），至少 32 字符。"
                 "生成：openssl rand -hex 32")
+        # .env 权限校验：文件内含 JWT_SECRET 与数据库密码。
+        # deploy.sh 只在部署时 chmod 600 一次，之后手工编辑/拷贝可能
+        # 把权限放宽回 644/755，同主机其他账号即可读取密钥并伪造 token。
+        # 这里每次启动复查，权限过宽直接拒绝启动（fail-closed）。
+        _check_env_file_permissions()
         try:
             from .core.database import init_db, sync_sequences
             init_db()
@@ -194,8 +213,8 @@ def healthz():
 
 
 @app.get("/api/healthz")
-def healthz():
-    """健康检查。"""
+def healthz_api():
+    """健康检查（带版本信息，前端用它探测后端是否就绪）。"""
     db_ok = health_check()
     payload = {"ok": db_ok, "db": "ok" if db_ok else "down"}
     if db_ok:

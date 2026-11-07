@@ -100,8 +100,18 @@ check("install 200", r.status_code == 200, r.text[:120])
 check("installed 标记", c.get("/api/install/status").json()["installed"] is True)
 
 print("\n=== 2. 登录 ===")
-l = c.post("/api/auth/login?username=admin&password=MyPass123")
+l = c.post("/api/auth/login", json={"username": "admin", "password": "MyPass123"})
 check("login 200", l.status_code == 200, l.text[:80])
+token = l.json()["token"]
+H = {"Authorization": f"Bearer {token}"}
+
+# 首次登录必须先改密，否则业务接口被 403 拦截
+cp = c.post("/api/auth/change-password",
+            json={"old_password": "MyPass123", "new_password": "NewPass456"},
+            headers=H)
+check("change-password 200", cp.status_code == 200, cp.text[:80])
+l = c.post("/api/auth/login", json={"username": "admin", "password": "NewPass456"})
+check("relogin 200", l.status_code == 200, l.text[:80])
 token = l.json()["token"]
 H = {"Authorization": f"Bearer {token}"}
 

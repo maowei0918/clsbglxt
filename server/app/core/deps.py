@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from .database import get_db
+from .config import MUST_CHANGE_ALLOWED
 from .redis_client import cache_get, cache_set
 from .security import decode_token
 
@@ -38,12 +39,19 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(401, "令牌无效或已过期")
 
     # token_version 校验：改密/停用后旧 token 立即失效
-    from ..models import User, UserRole, RolePermission
+    from ..models import User
     user = db.get(User, payload.get("uid"))
     if not user or not user.is_active or user.deleted_at.year != 1970:
         raise HTTPException(401, "账号已停用或删除")
     if user.token_version != payload.get("tv", -1):
         raise HTTPException(401, "令牌已失效，请重新登录")
+
+    # 强制改密拦截：安装向导初始密码、管理员重置的临时密码都需要
+    # 首次登录先改密。此前 must_change_password 只写不读（MUST_CHANGE_ALLOWED
+    # 是死配置），临时密码可无限期使用全部 API。
+    if user.must_change_password and request.url.path not in MUST_CHANGE_ALLOWED:
+        raise HTTPException(
+            403, "首次登录须先修改密码：请调用 /api/auth/change-password")
 
     return user
 
