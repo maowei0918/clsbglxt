@@ -1,5 +1,4 @@
 """车辆管理：车辆 + 类型 + 性质 + 围栏点。"""
-import json
 import logging
 import re
 

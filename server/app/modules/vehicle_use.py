@@ -1,5 +1,4 @@
 """临时用车备案。"""
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query

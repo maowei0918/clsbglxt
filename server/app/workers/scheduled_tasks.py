@@ -38,7 +38,7 @@ def daily_backup_all():
 @celery_app.task(queue="default")
 def purge_old_audit_logs():
     """清理过期审计日志（保留 AUDIT_RETENTION_DAYS 天）。"""
-    from sqlalchemy import create_engine, delete
+    from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from app.core.config import DATABASE_URL
     from app.models import AuditLog

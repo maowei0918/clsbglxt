@@ -6,7 +6,6 @@
   * 不可提升为超管
   * 管理员必须是本厂账号
 """
-import json
 import logging
 import secrets
 import string

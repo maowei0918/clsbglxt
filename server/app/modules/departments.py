@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.deps import get_current_user, require_perm
+from ..core.deps import require_perm
 from ..models import Department
 
 log = logging.getLogger("clglxt.departments")
