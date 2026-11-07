@@ -74,6 +74,93 @@ def _build_mutations() -> list[Mutation]:
     repairs = "app/modules/repairs2.py"
 
     return [
+        # ── 安全防护变异：证明测试真的能拦住对应缺陷 ──
+        Mutation(
+            name="must_change_check_removed",
+            target="app/core/deps.py",
+            original=(
+                "    if user.must_change_password and request.url.path not in MUST_CHANGE_ALLOWED:\n"
+                "        raise HTTPException(\n"
+                "            403, \"首次登录须先修改密码：请调用 /api/auth/change-password\")"
+            ),
+            mutated=(
+                "    if False and user.must_change_password:\n"
+                "        raise HTTPException(\n"
+                "            403, \"首次登录须先修改密码：请调用 /api/auth/change-password\")"
+            ),
+            tests=["tests/test_security_batch4.py::test_must_change_password_blocks_business_api"],
+        ),
+        Mutation(
+            name="backup_basepath_webdir_allowed",
+            target="app/modules/backup.py",
+            original=(
+                "        if p == bad or bad in p.parents:\n"
+                "            raise HTTPException(400, f\"备份目录不得位于 {bad} 之下\")"
+            ),
+            mutated=(
+                "        if False:\n"
+                "            raise HTTPException(400, f\"备份目录不得位于 {bad} 之下\")"
+            ),
+            tests=["tests/test_security_batch4.py::test_backup_base_path_validation"],
+        ),
+        Mutation(
+            name="pixel_guard_removed",
+            target="app/core/image_utils.py",
+            original="            _pixel_guard(im)",
+            mutated="            pass  # [MUTATION] 预检被移除",
+            tests=["tests/test_security_batch4.py::test_decompression_bomb_rejected_before_decode"],
+        ),
+        Mutation(
+            name="rate_limit_fails_open",
+            target="app/core/redis_client.py",
+            original=(
+                "    except Exception:\n"
+                "        log.warning(\"Redis 限频失败 key=%s，降级为进程内限频\", key,\n"
+                "                    exc_info=True)\n"
+                "        return _local_rate_limit(key, limit, window)"
+            ),
+            mutated=(
+                "    except Exception:\n"
+                "        return True, limit  # [MUTATION] Redis 挂了直接放行"
+            ),
+            tests=["tests/test_security_batch4.py::test_rate_limit_degrades_closed_when_redis_down"],
+        ),
+        Mutation(
+            name="audit_ip_trusts_any_xff",
+            target="app/core/audit.py",
+            original="    if direct in TRUSTED_PROXIES:\n        xff = request.headers.get(\"x-forwarded-for\", \"\")",
+            mutated="    if True:  # [MUTATION] 无条件信任 XFF\n        xff = request.headers.get(\"x-forwarded-for\", \"\")",
+            tests=["tests/test_security_batch4.py::test_audit_client_ip_ignores_xff_from_untrusted"],
+        ),
+        Mutation(
+            name="upload_path_traversal_allowed",
+            target="app/core/image_utils.py",
+            original=(
+                "    if rp != base and base not in rp.parents:\n"
+                "        raise ValueError(\"非法的存储路径\")"
+            ),
+            mutated=(
+                "    if False:\n"
+                "        raise ValueError(\"非法的存储路径\")"
+            ),
+            tests=["tests/test_security_batch4.py::test_upload_path_traversal_blocked"],
+        ),
+        Mutation(
+            name="att_path_validation_removed",
+            target="app/modules/repairs.py",
+            original=(
+                "    if not raw_path or \"\\x00\" in raw_path or Path(raw_path).is_absolute():\n"
+                "        raise HTTPException(400, \"附件路径非法\")\n"
+                "    if \"..\" in Path(raw_path).parts:\n"
+                "        raise HTTPException(400, \"附件路径非法\")\n"
+                "    return True"
+            ),
+            mutated=(
+                "    return True  # [MUTATION] 校验被移除"
+            ),
+            tests=["tests/test_security_batch4.py::test_attachment_rejects_client_paths"],
+        ),
+
         Mutation(
             name="repairs_claim_cas",
             target=repairs,
@@ -142,6 +229,27 @@ def _apply_and_restore(target: Path, original: str, mutated: str,
     return True, ""
 
 
+def _restore(target: Path, backup: Path, original_bytes: bytes) -> str | None:
+    """把文件还原为原始内容。成功返回 None，失败返回错误描述。
+
+    双重还原：先写原始字节，再校验；不一致时从备份覆盖，再校验。
+    任何一步抛异常都要转成字符串返回，不能让它逃出 finally 的调用点。
+    """
+    try:
+        target.write_bytes(original_bytes)
+    except Exception as e:
+        return f"写入原始内容失败：{type(e).__name__}: {e}"
+    if target.read_bytes() == original_bytes:
+        return None
+    try:
+        shutil.copy2(backup, target)
+    except Exception as e:
+        return f"从备份 {backup} 恢复失败：{type(e).__name__}: {e}"
+    if target.read_bytes() == original_bytes:
+        return None
+    return f"备份 {backup} 也无法还原，请立即手动恢复。"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="变异测试自检")
     ap.add_argument("--list", action="store_true", help="列出内置变异用例")
@@ -191,24 +299,25 @@ def main() -> int:
                 errored.append(m.name)
                 continue
 
+            restore_err = None
             try:
                 rc, tail = _run_tests(m.tests)
+            except Exception as e:
+                rc, tail = -1, f"{type(e).__name__}: {e}"
             finally:
-                # 无条件还原
-                target.write_bytes(original_bytes)
-                now_bytes = target.read_bytes()
-                if now_bytes != original_bytes:
-                    # 还原失败：从备份再试一次，然后大声报错
-                    shutil.copy2(backup, target)
-                    if target.read_bytes() != original_bytes:
-                        print(
-                            f"\n[FATAL] 无法还原 {m.target}！"
-                            f"请立即手动从 {backup} 恢复，"
-                            f"或检查该文件是否被其它进程改写。",
-                            file=sys.stderr,
-                        )
-                        errored.append(m.name)
-                        continue
+                # 无条件还原。还原本身的异常不在这里吞掉，而是带出去
+                # 让外层明确报错——变异留在工作区是这个工具最严重的
+                # 失效模式，绝不能静默继续。
+                restore_err = _restore(target, backup, original_bytes)
+
+            if restore_err:
+                print(
+                    f"\n[FATAL] {m.name} 无法还原 {m.target}！"
+                    f"{restore_err}",
+                    file=sys.stderr,
+                )
+                errored.append(m.name)
+                continue
 
             if rc != 0:
                 killed.append(m.name)
