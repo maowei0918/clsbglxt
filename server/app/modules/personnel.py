@@ -15,10 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.deps import get_current_user, require_perm, invalidate_perm_cache
+from ..core.deps import require_perm, invalidate_perm_cache
 from ..core.security import hash_password, validate_password
-from ..models import (Department, Role, RolePermission, User, UserRole, Supplier,
-                      EPOCH, alive, utcnow_naive)
+from ..models import (Department, Role, User, UserRole, Supplier,
+                      alive, utcnow_naive, is_deleted)
 
 log = logging.getLogger("clglxt.personnel")
 router = APIRouter(prefix="/personnel", tags=["personnel"])
@@ -36,7 +36,6 @@ def list_users(
     db: Session = Depends(get_db),
 ):
     """列人员（含已删，排除 superuser）。"""
-    from ..models import EPOCH
     q = db.query(User).filter(User.is_superuser == False)
     if keyword:
         like = f"%{keyword.strip()}%"
@@ -111,8 +110,9 @@ def update_user(
 ):
     """改号。"""
     user = db.get(User, user_id)
-    # 已加载对象用哨兵值比较；alive() 是 SQL 表达式，仅用于查询过滤
-    if not user or user.deleted_at != EPOCH or user.is_superuser:
+    # 已加载对象用 is_deleted() 判定：不能直接比较 aware EPOCH，
+    # SQLite 读回 naive datetime 会让 `!= EPOCH` 恒真（误判为已删）。
+    if not user or is_deleted(user) or user.is_superuser:
         raise HTTPException(404, "人员不存在")
 
     if name is not None:
@@ -146,7 +146,7 @@ def update_user(
 def delete_user(user_id: int, db: Session = Depends(get_db)):
     """删号=软删+停用。"""
     user = db.get(User, user_id)
-    if not user or user.deleted_at != EPOCH or user.is_superuser:
+    if not user or is_deleted(user) or user.is_superuser:
         raise HTTPException(404, "人员不存在")
 
     user.deleted_at = utcnow_naive()
@@ -226,7 +226,7 @@ def _out_user(user: User, db: Session) -> dict:
         "department_id": user.department_id, "supplier_id": user.supplier_id,
         "must_change_password": user.must_change_password,
         "is_active": user.is_active,
-        "deleted_at": user.deleted_at if user.deleted_at != EPOCH else None,
-        "is_deleted": user.deleted_at != EPOCH,
+        "deleted_at": user.deleted_at if not is_deleted(user) else None,
+        "is_deleted": is_deleted(user),
         "roles": [{"id": r.id, "name": r.name} for r in roles],
     }

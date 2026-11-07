@@ -9,7 +9,7 @@ from ..core.database import get_db
 from ..core.deps import get_current_user
 from ..core.parsing import parse_date
 from ..models import (DailyCheckPhoto, DailyCheckRecord, DailyCheckTemplate,
-                      EPOCH, User, Vehicle, alive, utcnow_naive)
+                      User, Vehicle, alive, utcnow_naive)
 from ..core.deps import require_perm
 from ..workers.ai_tasks import ai_review_daily_check
 

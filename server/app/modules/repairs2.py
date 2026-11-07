@@ -8,11 +8,11 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.deps import get_current_user, require_perm
-from ..models import (Attachment, Contract, ContractItem, RepairAction, RepairOrder,
+from ..models import (Attachment, ContractItem, RepairAction, RepairOrder,
                       RepairQuote, RepairQuoteItem, User, Vehicle)
 
 log = logging.getLogger("clglxt.repairs2")
@@ -206,7 +206,7 @@ def submit_quote(
     has_diff = False
 
     q = RepairQuote(order_id=o.id, user_id=current_user.id,
-                    contract_id=contract_id)
+                    contract_id=contract_id, note=note[:500])
     db.add(q)
     db.flush()          # 先落库拿到 q.id，明细才能挂上 quote_id
 

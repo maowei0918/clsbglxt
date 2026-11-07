@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from sqlalchemy import (BigInteger, Boolean, Date, DateTime, Float, ForeignKey,
                         Integer, Numeric, String, Text, UniqueConstraint)
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .core.database import Base
@@ -34,6 +33,22 @@ def alive(column):
     deleted_at 为 nullable=False、默认 EPOCH，故不可用 is_(None) 判定。
     """
     return column == EPOCH
+
+
+def is_deleted(obj) -> bool:
+    """已加载对象的软删判定（Python 层）。
+
+    禁止直接写 `obj.deleted_at != EPOCH`：EPOCH 是 aware datetime，
+    而 SQLite 读回的是 naive datetime，两者比较**恒为不等**——
+    导致 SQLite 下所有用户都被误判为「已删除」（改号/删号全 404）。
+
+    这里统一按年份判定：哨兵值固定是 1970-01-01，任何真实软删时间
+    都不可能落在 1970 年。PG/SQLite、aware/naive 均适用。
+    """
+    dt = getattr(obj, "deleted_at", None)
+    if dt is None:
+        return False
+    return dt.year != 1970
 
 
 def _epoch() -> datetime:
@@ -94,7 +109,7 @@ class Vehicle(Base):
     __tablename__ = "vehicles"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plate_no: Mapped[str] = mapped_column(String(16), unique=True)
-    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"))
+    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"), index=True)
     nature: Mapped[str] = mapped_column(String(32), default="")
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
     brand: Mapped[str] = mapped_column(String(64), default="")
@@ -113,8 +128,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(32))
     phone: Mapped[str] = mapped_column(String(20), default="")
     email: Mapped[str] = mapped_column(String(255), default="")
-    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True)
-    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("departments.id"), nullable=True, index=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True, index=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -139,15 +154,15 @@ class Role(Base):
 class RolePermission(Base):
     __tablename__ = "role_permissions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
     perm_code: Mapped[str] = mapped_column(String(64))
 
 
 class UserRole(Base):
     __tablename__ = "user_roles"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
 
 
 class Contract(Base):
@@ -168,15 +183,15 @@ class Contract(Base):
 class ContractVehicleType(Base):
     __tablename__ = "contract_vehicle_types"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    contract_id: Mapped[int] = mapped_column(ForeignKey("contracts.id"))
-    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"))
+    contract_id: Mapped[int] = mapped_column(ForeignKey("contracts.id"), index=True)
+    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"), index=True)
 
 
 class ContractItem(Base):
     __tablename__ = "contract_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    contract_id: Mapped[int] = mapped_column(ForeignKey("contracts.id"))
-    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"), nullable=False)
+    contract_id: Mapped[int] = mapped_column(ForeignKey("contracts.id"), index=True)
+    vehicle_type_id: Mapped[int] = mapped_column(ForeignKey("vehicle_types.id"), nullable=False, index=True)
     part_name: Mapped[str] = mapped_column(String(128))
     spec: Mapped[str] = mapped_column(String(64), default="")
     unit: Mapped[str] = mapped_column(String(16), default="个")
@@ -203,14 +218,14 @@ class RepairOrder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_no: Mapped[str] = mapped_column(String(32), unique=True)
     vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id"), index=True)
-    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     template_snapshot: Mapped[str] = mapped_column(Text, default="")
-    template_id: Mapped[int | None] = mapped_column(ForeignKey("flow_templates.id"), nullable=True)
+    template_id: Mapped[int | None] = mapped_column(ForeignKey("flow_templates.id"), nullable=True, index=True)
     current_seq: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(16), default="processing", index=True)
-    target_supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
-    quote_owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    target_supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True, index=True)
+    quote_owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     repair_start: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -226,9 +241,9 @@ class RepairOrder(Base):
 class RepairAction(Base):
     __tablename__ = "repair_actions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"))
+    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"), index=True)
     seq: Mapped[int] = mapped_column(Integer, default=0)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     action: Mapped[str] = mapped_column(String(16))
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -239,13 +254,14 @@ class RepairAction(Base):
 class RepairQuote(Base):
     __tablename__ = "repair_quotes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True, index=True)
     total_part: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('0'))
     total_labor: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('0'))
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('0'))
     has_diff: Mapped[bool] = mapped_column(Boolean, default=False)
+    note: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
     items = relationship("RepairQuoteItem", back_populates="quote")
@@ -255,13 +271,13 @@ class RepairQuote(Base):
 class RepairQuoteItem(Base):
     __tablename__ = "repair_quote_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    quote_id: Mapped[int] = mapped_column(ForeignKey("repair_quotes.id"))
+    quote_id: Mapped[int] = mapped_column(ForeignKey("repair_quotes.id"), index=True)
     part_name: Mapped[str] = mapped_column(String(128))
     spec: Mapped[str] = mapped_column(String(64), default="")
     qty: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('1'))
     part_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('0'))
     labor_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal('0'))
-    contract_item_id: Mapped[int | None] = mapped_column(ForeignKey("contract_items.id"), nullable=True)
+    contract_item_id: Mapped[int | None] = mapped_column(ForeignKey("contract_items.id"), nullable=True, index=True)
     contract_part_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     contract_labor_price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     is_diff: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -273,8 +289,8 @@ class RepairQuoteItem(Base):
 class RepairCC(Base):
     __tablename__ = "repair_cc"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    order_id: Mapped[int] = mapped_column(ForeignKey("repair_orders.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     step_seq: Mapped[int] = mapped_column(Integer, default=1)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -284,7 +300,7 @@ class Attachment(Base):
     __tablename__ = "attachments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     order_id: Mapped[int | None] = mapped_column(ForeignKey("repair_orders.id"), nullable=True, index=True)
-    action_id: Mapped[int | None] = mapped_column(ForeignKey("repair_actions.id"), nullable=True)
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("repair_actions.id"), nullable=True, index=True)
     step_seq: Mapped[int] = mapped_column(Integer, default=0)
     kind: Mapped[str] = mapped_column(String(8))
     saved_path: Mapped[str] = mapped_column(String(255))
@@ -315,7 +331,7 @@ class DailyCheckRecord(Base):
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicles.id"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     check_date: Mapped[date] = mapped_column(Date, index=True)
     results: Mapped[str] = mapped_column(Text)
     has_abnormal: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -362,8 +378,8 @@ class AuditLog(Base):
 class DailyCheckPhoto(Base):
     __tablename__ = "daily_check_photos"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    record_id: Mapped[int | None] = mapped_column(ForeignKey("daily_check_records.id"), nullable=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    record_id: Mapped[int | None] = mapped_column(ForeignKey("daily_check_records.id"), nullable=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     saved_path: Mapped[str] = mapped_column(String(255))
     orig_name: Mapped[str] = mapped_column(String(255), default="")
     mime: Mapped[str] = mapped_column(String(64), default="")
@@ -428,7 +444,7 @@ class BackupJob(Base):
     __tablename__ = "backup_jobs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(64))
-    target_id: Mapped[int] = mapped_column(ForeignKey("backup_targets.id"))
+    target_id: Mapped[int] = mapped_column(ForeignKey("backup_targets.id"), index=True)
     mode: Mapped[str] = mapped_column(String(16), default="incremental")
     schedule_type: Mapped[str] = mapped_column(String(16), default="manual")
     schedule_hour: Mapped[int] = mapped_column(Integer, default=3)
@@ -501,13 +517,6 @@ class BackupRestoreRun(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class LoginThrottle(Base):
-    __tablename__ = "login_throttle"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    key: Mapped[str] = mapped_column(String(128), index=True)
-    ts: Mapped[float] = mapped_column(Float, default=0.0, index=True)
-
-
 class Notification(Base):
     __tablename__ = "notifications"
     id: Mapped[int] = mapped_column(
@@ -550,8 +559,8 @@ class TempVehicleUse(Base):
     __tablename__ = "temp_vehicle_uses"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plate_no: Mapped[str] = mapped_column(String(16), index=True)
-    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True)
-    vehicle_type_id: Mapped[int | None] = mapped_column(ForeignKey("vehicle_types.id"), nullable=True)
+    vehicle_id: Mapped[int | None] = mapped_column(ForeignKey("vehicles.id"), nullable=True, index=True)
+    vehicle_type_id: Mapped[int | None] = mapped_column(ForeignKey("vehicle_types.id"), nullable=True, index=True)
     nature: Mapped[str] = mapped_column(String(32), default="")
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"), index=True)
     start_date: Mapped[date] = mapped_column(Date)
@@ -559,7 +568,7 @@ class TempVehicleUse(Base):
     reason: Mapped[str] = mapped_column(String(255), default="")
     park_location: Mapped[str] = mapped_column(String(255), default="")
     remark: Mapped[str] = mapped_column(String(255), default="")
-    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -636,7 +645,7 @@ class ApiKey(Base):
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     key_prefix: Mapped[str] = mapped_column(String(16))
     scopes: Mapped[str] = mapped_column(Text, default="[]")
-    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -725,8 +734,7 @@ __all__ = [
     "DailyCheckTemplate", "DailyCheckRecord", "DailyCheckPhoto",
     "AuditLog", "AiUsage", "AppSetting", "PasswordReset",
     "BackupTarget", "BackupJob", "BackupRun", "BackupItem", "BackupRestoreRun",
-    "LoginThrottle", "Notification", "SeqCounter", "AppRelease", "TempVehicleUse",
+    "Notification", "SeqCounter", "AppRelease", "TempVehicleUse",
     "FencePoint", "FenceAlert", "FenceNightRun", "GpsCache", "ApiKey",
     "Che1Vehicle", "Che1Usage", "Che1Fuel", "Che1SyncRun",
-    "notify",
 ]
