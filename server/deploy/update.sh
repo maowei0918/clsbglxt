@@ -36,6 +36,21 @@ echo "=============================================="
 
 [[ $EUID -eq 0 ]] || { echo "请用 root 运行：sudo bash deploy/update.sh"; exit 1; }
 
+# ── 回滚代码的公共函数 ──────────────────────────────────────────
+# 用「覆盖式还原」（tar 管道），绝不用 rsync --delete：
+# 备份时排除了 data/ 与 .venv/，--delete 会把上传件、备份件、
+# 整个虚拟环境连带删掉 —— 这是旧版最危险的缺陷。
+rollback_code() {
+    [[ -d "$CODE_BACKUP/server" ]] || { echo "⚠ 无代码备份，跳过代码回滚" >&2; return 1; }
+    (cd "$CODE_BACKUP/server" && tar -cf - .) | (cd "$PROJECT_ROOT" && tar -xf -) \
+        || { echo "✗ 代码回滚失败" >&2; return 1; }
+    if [[ -f "$CODE_BACKUP/server/.env" ]]; then
+        cp -f "$CODE_BACKUP/server/.env" "$PROJECT_ROOT/.env"
+        chmod 600 "$PROJECT_ROOT/.env"
+    fi
+    echo "   ✓ 代码与 .env 已还原"
+}
+
 # ── 依赖检查：rsync 用于代码备份/回滚，缺失会导致静默失败 ──
 if ! command -v rsync >/dev/null 2>&1; then
     echo "✗ 缺少 rsync（备份/回滚依赖）。请先：apt install -y rsync" >&2
@@ -45,6 +60,12 @@ fi
 # ── 0. 更新前：确认服务在跑（更新前必须健康）──
 if ! systemctl is-active --quiet clglxt-web; then
     echo "⚠ 更新前服务未运行，仍继续（可能刚首次部署）"
+fi
+
+# ── 0.5 .env 权限守护（每次更新复查，防止手工编辑后放宽）──
+if [ -f .env ]; then
+    chmod 600 .env
+    echo "== ✓ .env 权限已收紧为 600"
 fi
 
 # ── 1. 备份当前代码（防止更新失败后无法回滚）──
@@ -84,10 +105,22 @@ fi
 # ── 4. 数据库迁移（增量，幂等）──
 if [ -f data/.install_done ]; then
     echo "== 执行数据库迁移..."
+    # 迁移前先做一次数据库备份：迁移失败时可以拿它恢复，
+    # 而不是面对「代码回滚成功但 schema 已变」的组合故障。
+    DB_BACKUP="$BACKUP_ROOT/db_pre_migrate_$STAMP.dump"
+    mkdir -p "$BACKUP_ROOT"
+    pg_dump --format=custom --no-owner -f "$DB_BACKUP" \
+        "$(awk -F= '/^CLGLXT_DATABASE_URL=/ {sub(/^CLGLXT_DATABASE_URL=/,""); print; exit}' .env)" \
+        2>/dev/null && echo "   已备份数据库 → $DB_BACKUP" \
+        || echo "   ⚠ 数据库预备份失败，继续（迁移失败将无法回滚 DB）"
+
     # 迁移失败是更新失败的高发点：失败则回滚代码并退出
     if ! "$VENV/bin/alembic" -c alembic.ini upgrade head; then
         echo "✗ 迁移失败，回滚代码并退出"
-        [[ -d "$CODE_BACKUP/server" ]] && rsync -a --delete "$CODE_BACKUP/server/" ./
+        echo "  数据库可能已部分迁移。DB 备份在：$DB_BACKUP"
+        echo "  恢复命令（详见 rollback.sh --with-db）："
+        echo "    pg_restore --clean --if-exists --no-owner -d <DB> $DB_BACKUP"
+        rollback_code || true
         exit 1
     fi
 fi
@@ -108,7 +141,7 @@ if systemctl is-active --quiet clglxt-web && curl -fsS -o /dev/null http://127.0
     exit 0
 else
     echo "✗ 更新后健康检查失败，自动回滚代码"
-    [[ -d "$CODE_BACKUP/server" ]] && rsync -a --delete "$CODE_BACKUP/server/" ./
+    rollback_code || true
     systemctl restart clglxt-web clglxt-worker clglxt-beat
     echo "已回滚到备份。人工排查：journalctl -u clglxt-web -n 50"
     exit 1

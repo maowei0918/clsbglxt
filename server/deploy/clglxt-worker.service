@@ -5,13 +5,20 @@ After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 
 [Service]
-Type=notify
+# Celery 不调用 sd_notify（全包 0 处），Type=notify 会让 systemd 等满
+# DefaultTimeoutStartSec 后 SIGKILL 并判失败，配合 Restart=always 形成
+# 无限崩溃循环。必须用 simple。
+Type=simple
 User=__WEB_USER__
 Group=__WEB_USER__
 WorkingDirectory=__PROJECT_ROOT__
+# 并发数：systemd 只支持 ${VAR}，不支持 shell 的 ${VAR:-default}。
+# 先用 Environment 给默认值 2 兜底，再加载 .env —— systemd 按出现
+# 顺序应用，后出现的覆盖先出现的，因此 .env 中的同名值优先生效。
+Environment=CLGLXT_CELERY_WORKER_CONCURRENCY=2
 EnvironmentFile=__PROJECT_ROOT__/.env
 Environment=PATH=__PROJECT_ROOT__/.venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=__PROJECT_ROOT__/.venv/bin/celery -A app.celery_app worker -l info -Q default,backup,ai,mail,notify -P threads -c ${CLGLXT_CELERY_WORKER_CONCURRENCY:-2} --max-tasks-per-child 200
+ExecStart=__PROJECT_ROOT__/.venv/bin/celery -A app.celery_app worker -l info -Q default,backup,ai,mail,notify -P threads -c ${CLGLXT_CELERY_WORKER_CONCURRENCY} --max-tasks-per-child 200
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=always
 RestartSec=10
