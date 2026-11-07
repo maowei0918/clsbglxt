@@ -6,50 +6,83 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: 后端回归 + 变异自检
+  lint:
+    name: 静态检查（ruff）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # ruff 版本锁定，避免新版本引入新规则导致 CI 无故变红
+      - run: pip install ruff==0.17.4
+      - working-directory: server
+        run: ruff check .
+
+  audit:
+    name: 依赖漏洞扫描（pip-audit）
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # 按 requirements.lock 安装，锁文件里 62 个包的真实组合
+      - working-directory: server
+        run: pip install -r requirements.lock
+      - working-directory: server
+        # 审计锁文件（不是已安装环境），保证审的是"将部署的组合"。
+        # --strict：任何非零发现都失败。忽略清单见 .pip-audit-ignore.txt，
+        # 条目格式 "VulnID | 理由 | 复核日期"，此处动态展开为 --ignore-vuln。
+        run: |
+          IGNORES=$(grep -E '^[A-Z]+-[0-9]+' .pip-audit-ignore.txt | cut -d'|' -f1 | tr -d ' ' || true)
+          ARGS=""
+          for id in $IGNORES; do ARGS="$ARGS --ignore-vuln $id"; done
+          echo "忽略清单: ${IGNORES:-无}"
+          pip-audit -r requirements.lock --strict $ARGS
+
+  test-sqlite:
+    name: 回归（SQLite）+ 变异自检
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 准备 Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: server/requirements.txt
-
-      - name: 安装依赖
+          cache-dependency-path: |
+            server/requirements.lock
+      - name: 安装依赖（锁文件）
         working-directory: server
-        # 清掉可能继承自宿主机的 PYTHONPATH，避免 pip 误判系统包已满足而漏装依赖
         run: |
           unset PYTHONPATH
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          # pytest 不在 requirements.txt（生产不依赖），CI 单独装
-          python -m pip install pytest
-
-      - name: 全量回归
+          python -m pip install -r requirements.lock
+          # pytest / pytest-cov 不进生产锁文件，CI 单独装
+          python -m pip install pytest pytest-cov
+      - name: 全量回归 + 覆盖率
         working-directory: server
         run: |
           unset PYTHONPATH
-          python -m pytest tests/ -q
-
+          # 门槛按现状（50%）取 45%：挡住明显倒退，又不至于
+          # 每次小改动就误伤变红。提升覆盖率是有意识的工作，不是硬卡。
+          python -m pytest tests/ -q \
+            --cov=app --cov-report=term --cov-report=xml \
+            --cov-fail-under=45
       - name: 变异自检（验证测试有效性）
         working-directory: server
         run: |
           unset PYTHONPATH
           python scripts/mutation_check.py
-
       - name: 工作区污染兜底
         working-directory: server
         run: |
           # 三道独立兜底，任何一道不过即让整个 job 变红
           # 1) 变异脚本改过的生产代码必须已还原（变异测试最大的风险是留毒）
-          git diff --exit-code -- app/ || {
+          git diff --exit-code -- app/ scripts/ || {
             echo "::error::变异自检未还原对生产代码的改动！"; exit 1; }
           # 2) 测试不得在 server/ 留下 .env（历史上被测试改写导致全站 token 失效）
           [ ! -f .env ] || { echo "::error::测试意外创建了 .env"; exit 1; }
@@ -58,15 +91,81 @@ jobs:
             [ ! -e "$f" ] || { echo "::error::遗留安装期残留 $f"; exit 1; }
           done
           echo "工作区干净 ✓"
-
-      - name: 上传失败诊断（仅当失败时）
-        if: failure()
+      - name: 上传覆盖率报告
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-logs
-          # 只捞日志类文件，避免把整个 server/ 打上去
-          path: |
-            server/*.log
-            server/logs/
-          if-no-files-found: ignore
+          name: coverage-sqlite
+          path: server/coverage.xml
           retention-days: 7
+
+  test-postgres:
+    name: 回归（PostgreSQL 16）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: clglxt
+          POSTGRES_PASSWORD: clglxt
+          POSTGRES_DB: clglxt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clglxt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: server/requirements.lock
+      - name: 安装依赖（锁文件）
+        working-directory: server
+        run: |
+          unset PYTHONPATH
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.lock
+          python -m pip install pytest
+      # 其余测试在导入时强制把 DATABASE_URL 改成 SQLite（见各文件顶部
+      # os.environ[...] = "sqlite:///./..."），所以全量跑并不会真的用上
+      # 这个 PG service，只会白白多一个容器。方言覆盖由下面两步承担：
+      #   * test_pg_integration.py —— 序列同步、显式 ID 插入等 PG 专属 SQL
+      #   * test_pg_sequence_and_roles.py —— 序列与角色权限
+      #     （用假 engine 断言 SQL 形态，不依赖真 PG，加进来是为统一入口）
+      - name: PG 专属回归（方言差异）
+        working-directory: server
+        env:
+          CLGLXT_TEST_PG_URL: postgresql+psycopg2://clglxt:clglxt@localhost:5432/clglxt
+          CLGLXT_JWT_SECRET: "ci-only-not-a-real-secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        run: |
+          unset PYTHONPATH
+          python -m pytest tests/test_pg_integration.py tests/test_pg_sequence_and_roles.py -v
+      - name: 工作区污染兜底
+        working-directory: server
+        run: |
+          git diff --exit-code -- app/ scripts/ || {
+            echo "::error::测试或变异未还原改动！"; exit 1; }
+          [ ! -f .env ] || { echo "::error::测试意外创建了 .env"; exit 1; }
+
+  frontend-build:
+    name: 前端构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+      - name: 构建（含类型/模板错误检查）
+        working-directory: frontend
+        run: npm run build

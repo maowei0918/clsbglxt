@@ -1,0 +1,58 @@
+[project]
+name = "clglxt"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# 只检查应用代码与迁移；tests/ 里的脚本式测试保留其风格
+include = ["app/**/*.py", "alembic/versions/*.py", "scripts/*.py"]
+
+[tool.ruff.lint]
+# F   : Pyflakes（未定义名、重定义、导入未用）—— 真 bug 高发区
+# E9  : 语法错误
+# B   : flake8-bugbear（可变默认参数、循环变量等）
+# S   : bandit 安全子集（仅高置信度项）
+select = ["F", "E9", "B", "S"]
+
+ignore = [
+    # FastAPI 依赖注入的标准写法就是 Depends() 写在默认参数里。
+    # 项目里 144 处，全是惯用法，不是 bug。
+    "B008",
+    # 出站通知 / 缓存 / 第三方解析的降级路径，刻意兜住所有异常。
+    # 这些位置改成裸抛会把次要故障放大成主流程 500。
+    "BLE001",
+    # 后台任务与探针允许在异常时静默跳过（有外层日志/重试兜底）。
+    "S110",
+    # subprocess.run 已显式判断 returncode，check= 是等价写法。
+    "PLW1510",
+    # 内部脚本不需要给每一行都写 random 的注释。
+    "S311",
+    # ua_hash 用 md5 只是给 User-Agent 做去重/聚合键，不是口令或签名，
+    # 不涉及碰撞攻击面。
+    "S324",
+    # B904（raise 未带 from）在本项目里是刻意的：对外暴露的 HTTPException
+    # 文案要干净，不把底层 SQL/IO 异常链透给客户端。
+    "B904",
+    # B007 循环变量未使用，仅影响可读性；该类告警在解析代码里较多。
+    "B007",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/core/backup_engine.py" = [
+    # pg_dump / pg_restore 是固定命令 + 参数数组（无 shell、无拼接用户输入），
+    # 用全路径会让依赖系统 PATH 的部署环境失效。
+    "S603", "S607",
+]
+"app/core/database.py" = [
+    # sync_sequences 需要拼接来自 pg_catalog 的标识符，已用 _SAFE_IDENT
+    # 白名单逐段校验，无法用绑定参数替代。
+    "S608",
+]
+# alembic 迁移里 `from alembic import op` 是框架约定，不算未用导入
+"alembic/versions/*.py" = ["F401"]
+"scripts/mutation_check.py" = ["S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

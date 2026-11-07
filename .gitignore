@@ -18,6 +18,14 @@ data/.install_done
 data/uploads/
 data/backups/
 logs/
+
+# 测试与覆盖率产物
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.ruff_cache/
 *.log
 
 # 前端
