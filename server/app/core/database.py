@@ -130,12 +130,21 @@ def sync_sequences(engine=None) -> None:
             if not seq:
                 continue
 
+            # 序列名可能带 schema 前缀（public.foo_id_seq）或双引号
+            # （含大写/特殊字符），逐个片段校验后再拼接。
+            seq = str(seq)
+            parts = [p.strip('"') for p in seq.split(".")]
+            if not parts or not all(_SAFE_IDENT.match(p) for p in parts):
+                log.warning("跳过可疑序列名：%r", seq)
+                continue
+            seq_ident = ".".join(f'"{p}"' for p in parts)
+
             # 只前进不回退：若序列已领先（例如补过数据、删过行），
             # 无脑 setval(max+1) 会让 ID 复用，撞软删行/外键。
             # 先取序列当前逻辑位置（is_called=false 时 last_value 尚未发出），
             # 与 max(id)+1 取大者。
             pos = conn.execute(
-                text("SELECT last_value, is_called FROM " + seq)
+                text("SELECT last_value, is_called FROM " + seq_ident)
             ).first()
             seq_next = 1 if (pos is None or not pos[1]) else int(pos[0]) + 1
             table_next = conn.execute(
