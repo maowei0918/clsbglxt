@@ -1,16 +1,14 @@
 """AI 审核任务。日检无 Key 时降级放行。"""
 from app.celery_app import celery_app
-from app.core.config import AI_DAILY_QUOTA
-from app.core.redis_client import rate_limit
 from app.models import DailyCheckRecord
-from sqlalchemy.orm import Session
 
 @celery_app.task(bind=True, queue="ai", acks_late=True, max_retries=3)
 def ai_review_daily_check(self, record_id: int, operator_id: int = 0):
     """审核日检照片。无 Key 时降级放行。"""
-    engine = self.app.context["db_engine"]
-    Session = sessionmaker(bind=engine, expire_on_commit=False)
-    db = Session()
+    # 从应用引擎取 session 工厂：Celery App 没有 context 属性，
+    # 旧写法 self.app.context["db_engine"] 每次都会 AttributeError。
+    from app.core.database import SessionLocal
+    db = SessionLocal()
     try:
         rec = db.get(DailyCheckRecord, record_id)
         if not rec:
